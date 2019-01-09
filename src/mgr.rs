@@ -55,12 +55,16 @@ impl Mgr {
 	}
 	// 创建事务
 	pub fn transaction(&self, writable: bool) -> Tr {
+		println!("Mgr::transaction");
 		let id = self.2.gen(0);
 		self.3.acount.fetch_add(1, Ordering::SeqCst);
 		let map = {
 			self.1.lock().unwrap().clone()
 		};
-		self.0.lock().unwrap().transaction(map, writable, id, self.clone())
+		println!("before lock ----- Mgr::transaction");
+		let mut t = self.0.lock().unwrap();
+		println!("after lock ------ Mgr::transaction");
+		t.transaction(map, writable, id, self.clone())
 	}
 
 	pub fn listen(&self, monitor: Arc<Monitor>){
@@ -128,7 +132,10 @@ impl Tr {
 	}
 	// 预提交一个事务
 	pub fn prepare(&self, cb: TxCallback) -> DBResult {
+		println!("before lock ------- Tr::prepare");
 		let mut t = self.0.lock().unwrap();
+		println!("after lock ------- Tr::prepare");
+
 		match t.state {
 			TxState::Ok => t.prepare(self, cb),
 			_ => Some(Err(String::from("InvalidState, expect:TxState::Ok, found:") + t.state.to_string().as_str())),
@@ -136,7 +143,10 @@ impl Tr {
 	}
 	// 提交一个事务
 	pub fn commit(&self, cb: TxCallback) -> DBResult {
+		println!("before lock ------- Tr::commit");
 		let mut t = self.0.lock().unwrap();
+		println!("after lock ------- Tr::commit");
+
 		match t.state {
 			TxState::PreparOk => t.commit(self, cb),
 			_ => Some(Err(String::from("InvalidState, expect:TxState::PreparOk, found:") + t.state.to_string().as_str())),
@@ -167,7 +177,9 @@ impl Tr {
 		read_lock: bool,
 		cb: TxQueryCallback,
 	) -> Option<SResult<Vec<TabKV>>> {
+		println!("before lock ------- Tr::query");
 		let mut t = self.0.lock().unwrap();
+		println!("after lock ------- Tr::query");
 		match t.state {
 			TxState::Ok => t.query(self, arr, lock_time, read_lock, cb),
 			_ => Some(Err(String::from("InvalidState, expect:TxState::Ok, found:") + t.state.to_string().as_str())),
@@ -175,7 +187,10 @@ impl Tr {
 	}
 	// 修改，插入、删除及更新
 	pub fn modify(&self, arr: Vec<TabKV>, lock_time: Option<usize>, read_lock: bool, cb: TxCallback) -> DBResult {
+		println!("before lock ------- Tr::modify");
 		let mut t = self.0.lock().unwrap();
+		println!("after lock ------- Tr::modify");
+
 		if !t.writable {
 			return Some(Err(String::from("Readonly")))
 		}
@@ -270,7 +285,10 @@ impl Tr {
 	}
 	// 创建、修改或删除表
 	pub fn alter(&self, ware_name:&Atom, tab_name: &Atom, meta: Option<Arc<TabMeta>>, cb: TxCallback) -> DBResult {
+		println!("before lock ------- Tr::alter");
 		let mut t = self.0.lock().unwrap();
+		println!("after lock ------- Tr::alter");
+
 		if !t.writable {
 			return Some(Err(String::from("Readonly")))
 		}
@@ -293,7 +311,9 @@ impl Tr {
 
 	// 比较并设置状态
 	fn cs_state(&self, old: TxState, new: TxState) -> bool {
+		println!("before lock -----Tr::cs_state");
 		let mut t = self.0.lock().unwrap();
+		println!("after lock -----Tr::cs_state");
 		if t.state.clone() as usize == old as usize {
 			t.state = new;
 			return true;
@@ -322,6 +342,7 @@ impl Manager {
 	}
 	// 创建事务
 	fn transaction(&mut self, ware_map: WareMap, writable: bool, id: Guid, mgr: Mgr) -> Tr {
+		println!("manager::transaction {:?}", id.0);
 		// 遍历ware_map, 将每个Ware的快照TabLog记录下来
 		let mut map = FnvHashMap::with_capacity_and_hasher(ware_map.0.size() * 3 / 2, Default::default());
 		for Entry(k, v) in ware_map.0.iter(None, false){
@@ -477,6 +498,9 @@ impl Tx {
 	}
 	// 提交事务
 	fn commit(&mut self, tr: &Tr, cb: TxCallback) -> DBResult {
+		println!("commit: number of tab_txns: {:?}", self.tab_txns.len());
+		println!("commit: number of meta_txns: {:?}", self.meta_txns.len());
+
 		self.state = TxState::Committing;
 		// 先提交mgr上的事务
 		let alter_len = self.meta_txns.len();
@@ -490,19 +514,23 @@ impl Tx {
 		let c = count.clone();
 		let tr1 = tr.clone();
 		let bf = Arc::new(move |r: SResult<()> | {
+			println!("Mgr commit async callback !!!!! ----------- ");
 			match r {
 				Ok(_) => tr1.cs_state(TxState::Committing, TxState::Commited),
 				_ => tr1.cs_state(TxState::Committing, TxState::CommitFail)
 			};
 			if c.fetch_sub(1, Ordering::SeqCst) == 1 {
+				println!("txn actually committed");
 				cb(Ok(()))
 			}
 		});
 
 		//处理每个表的提交
 		for (txn_name, val) in self.tab_txns.iter_mut() {
+			println!("commit tab_txns xxxxxxx");
 			match val.commit(bf.clone()) {
 				Some(r) => {
+					println!("Mgr tab txn commit sync call");
 					match r {
 						Ok(logs) => {
 							for (k, v) in logs.into_iter(){ //将表的提交日志添加到事件列表中
@@ -519,6 +547,7 @@ impl Tx {
 						_ => self.state = TxState::CommitFail
 					};
 					if count.fetch_sub(1, Ordering::SeqCst) == 1 {
+						println!("tab txn actually comitted");
 						return Some(Ok(()))
 					}
 				}
@@ -527,13 +556,16 @@ impl Tx {
 		}
 		//处理tab alter的提交
 		for val in self.meta_txns.values_mut() {
+			println!("commit meta_txns");
 			match val.commit(bf.clone()) {
 				Some(r) => {
+					println!("Mgr meta txn commit sync call: {:?}", r);
 					match r {
 						Ok(_) => (),
 						_ => self.state = TxState::CommitFail
 					};
 					if count.fetch_sub(1, Ordering::SeqCst) == 1 {
+						println!("meta txn actually comitted");
 						return Some(Ok(()))
 					}
 				}
@@ -730,6 +762,7 @@ impl Tx {
 			let c2 = count.clone();
 			let cb2 = cb.clone();
 			let tr2 = tr.clone();
+			// 回调是异步写法，返回值是同步写法
 			match self.build(&ware_name, &tab_name, Box::new(move |r| {
 				match r {
 					Ok(t) => match t.modify(tkv1.clone(), lock_time, read_lock, bf1.clone()) {
@@ -897,6 +930,7 @@ impl Tx {
 			}
 		};
 		self.tab_txns.insert(txn_key, txn.clone());
+		println!("build: number of txns: {:?}", self.tab_txns.len());
 		Some(Ok(txn))
 	}
 	// 处理同步返回的数量结果

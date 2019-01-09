@@ -26,6 +26,7 @@ impl Tab for MTab {
 		MTab(Arc::new(Mutex::new(tab)))
 	}
 	fn transaction(&self, id: &Guid, writable: bool) -> Arc<TabTxn> {
+		println!("create memory db txn");
 		let txn = MemeryTxn::new(self.clone(), id, writable);
 		return Arc::new(txn)
 	}
