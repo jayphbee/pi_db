@@ -504,6 +504,7 @@ impl Tx {
 			}
 		}
 		let len = self.tab_txns.len() + alter_len;
+		println!(" ======== pi_db::mgr::commit alter_len: {:?}, tab_txn_len: {:?}", alter_len, self.tab_txns.len());
 		let count = Arc::new(AtomicUsize::new(len));
 		let c = count.clone();
 		let tr1 = tr.clone();
