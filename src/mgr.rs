@@ -1,6 +1,9 @@
 /**
  * 基于2pc的db管理器，每个db实现需要将自己注册到管理器上
  */
+
+use lazy_static;
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::mem;
@@ -14,6 +17,15 @@ use sinfo::EnumType;
 use guid::{Guid, GuidGen};
 
 use db::{SResult, DBResult, IterResult, KeyIterResult, Filter, TabKV, TxCallback, TxQueryCallback, TxState, MetaTxn, TabTxn, Ware, WareSnapshot, Bin, RwLog, TabMeta};
+
+pub struct CommitChan(pub Guid, pub TxCallback);
+
+unsafe impl Send for CommitChan {}
+unsafe impl Sync for CommitChan {}
+
+lazy_static! {
+	pub static ref COMMIT_CHAN: (Sender<CommitChan>, Receiver<CommitChan>) = unbounded();
+}
 
 // 表库及事务管理器
 #[derive(Clone)]
@@ -508,13 +520,23 @@ impl Tx {
 		let count = Arc::new(AtomicUsize::new(len));
 		let c = count.clone();
 		let tr1 = tr.clone();
+		let txid = self.id.clone();
+		let writable = self.writable;
 		let bf = Arc::new(move |r: SResult<()> | {
 			match r {
 				Ok(_) => tr1.cs_state(TxState::Committing, TxState::Commited),
 				_ => tr1.cs_state(TxState::Committing, TxState::CommitFail)
 			};
 			if c.fetch_sub(1, Ordering::SeqCst) == 1 {
-				cb(Ok(()))
+				if writable {
+					// 读写事务通过无界channel排队提交
+					println!("====== before pi_db::mgr::commit finally commit");
+					COMMIT_CHAN.0.send(CommitChan(txid.clone(), cb.clone()));
+					println!("====== after pi_db::mgr::commit finally commit");
+				} else {
+					// 只读事务直接提交
+					cb(Ok(()))
+				}
 			}
 		});
 
