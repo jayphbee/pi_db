@@ -3,7 +3,7 @@
  */
 
 use lazy_static;
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::mem;
@@ -516,7 +516,7 @@ impl Tx {
 			}
 		}
 		let len = self.tab_txns.len() + alter_len;
-		println!(" ======== pi_db::mgr::commit alter_len: {:?}, tab_txn_len: {:?}", alter_len, self.tab_txns.len());
+		println!(" ======== pi_db::mgr::commit txid: {:?}, alter_len: {:?}, tab_txn_len: {:?}", self.id.time(), alter_len, self.tab_txns.len());
 		let count = Arc::new(AtomicUsize::new(len));
 		let c = count.clone();
 		let tr1 = tr.clone();
@@ -531,7 +531,11 @@ impl Tx {
 				if writable {
 					// 读写事务通过无界channel排队提交
 					println!("====== before pi_db::mgr::commit finally commit");
-					COMMIT_CHAN.0.send(CommitChan(txid.clone(), cb.clone()));
+					match COMMIT_CHAN.0.try_send(CommitChan(txid.clone(), cb.clone())) {
+						Ok(_) => println!("COMMIT_CHAN send success, txid: {:?}", txid.time()),
+						Err(TrySendError::Full(_)) => println!("COMMIT_CHAN full"),
+						Err(TrySendError::Disconnected(_)) => println!("COMMIT_CHAN disconnected"),
+					}
 					println!("====== after pi_db::mgr::commit finally commit");
 				} else {
 					// 只读事务直接提交
@@ -542,6 +546,7 @@ impl Tx {
 
 		//处理每个表的提交
 		for (txn_name, val) in self.tab_txns.iter_mut() {
+			println!("===== pi_db::mgr commit tab_txns: {:?}", txn_name);
 			match val.commit(bf.clone()) {
 				Some(r) => {
 					match r {
