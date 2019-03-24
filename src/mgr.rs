@@ -567,7 +567,8 @@ impl Tx {
 			}
 		}
 		//处理tab alter的提交
-		for val in self.meta_txns.values_mut() {
+		for (key, val) in self.meta_txns.iter_mut() {
+			println!("=== alter ware: {:?}", key);
 			match val.commit(bf.clone()) {
 				Some(r) => {
 					match r {
