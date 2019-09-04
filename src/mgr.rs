@@ -150,6 +150,9 @@ impl Statistics {
 pub struct Tr(Arc<Mutex<Tx>>);
 
 impl Tr {
+	pub fn snapshot(&self, tab: &Atom, from: &Atom, cb: TxCallback) -> DBResult {
+		self.0.lock().unwrap().snapshot(tab, from, cb)
+	}
 	// 判断事务是否可写
 	pub fn is_writable(&self) -> bool {
 		self.0.lock().unwrap().writable
@@ -474,6 +477,17 @@ struct Tx {
 }
 
 impl Tx {
+	// 快照
+	// NOTE: 需不要传库名参数
+	fn snapshot(&self, tab: &Atom, from: &Atom, cb: TxCallback) -> DBResult {
+		for ws in self.ware_log_map.values() {
+			ws.meta_txn(&self.id).snapshot(tab, from, cb.clone())?;
+		}
+		// let waresnapshot = self.ware_log_map.get(ware).unwrap();
+		// let meta_txn = waresnapshot.meta_txn(&self.id);
+		// meta_txn.snapshot(tab, from, cb)
+		Some(Ok(()))
+	}
 	// 预提交事务
 	fn prepare(&mut self, tr: &Tr, cb: TxCallback) -> DBResult {
 		//如果预提交内容为空，直接返回预提交成功
@@ -623,6 +637,7 @@ impl Tx {
 				Some(r) => {
 					match r {
 						Ok(logs) => {
+							self.state = TxState::Commited;
 							for (k, v) in logs.into_iter(){ //将表的提交日志添加到事件列表中
 								match v {
 									RwLog::Write(value) => {
@@ -651,7 +666,7 @@ impl Tx {
 			match val.commit(bf.clone()) {
 				Some(r) => {
 					match r {
-						Ok(_) => (),
+						Ok(_) => self.state = TxState::Commited,
 						_ => self.state = TxState::CommitFail
 					};
 					if count.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -1178,8 +1193,8 @@ fn single_result_err<T>(r: SResult<T>, tr: &Tr, cb: &Arc<Fn(SResult<T>)>) {
 use memery_db;
 #[cfg(test)]
 use bon::{WriteBuffer, ReadBuffer, Encode, Decode, ReadBonErr};
-#[cfg(test)]
-use std::collections::HashMap;
+// #[cfg(test)]
+// use std::collections::HashMap;
 #[cfg(test)]
 use sinfo::StructInfo;
 
@@ -1206,6 +1221,134 @@ impl Decode for Player{
 			id: u32::decode(bb)?,
 		})
 	}
+}
+
+
+
+
+#[test]
+fn test_snapshot() {
+	fn build_db_key(key: &str) -> Arc<Vec<u8>> {
+		let mut wb = WriteBuffer::new();
+		wb.write_utf8(key);
+		Arc::new(wb.get_byte().to_vec())
+	}
+
+	fn build_db_val(val: &str) -> Arc<Vec<u8>> {
+		let mut wb = WriteBuffer::new();
+		wb.write_utf8(val);
+		Arc::new(wb.get_byte().to_vec())
+	}
+
+	let mgr = Mgr::new(GuidGen::new(1,1));
+	let db = memery_db::DB::new();
+	mgr.register(Atom::from("memery"), Arc::new(db));
+	let mgr = Arc::new(mgr);
+
+	let tr = mgr.transaction(true);
+	tr.alter(&Atom::from("memery"), &Atom::from("test"), Some(Arc::new(TabMeta {
+            k: EnumType::Str,
+            v: EnumType::Str,
+        })), Arc::new(move |_| {}));
+	tr.prepare(Arc::new(move |_| {}));
+	tr.commit(Arc::new(move |_| {}));
+
+	println!("tr state:{:?}", tr.get_state());
+
+	// --------------------------
+	// 向 test 插入数据
+	
+	let tr3 = mgr.transaction(true);
+	let mut arr = vec![];
+	arr.push(TabKV {
+		ware: Atom::from("memery"),
+		tab: Atom::from("test"),
+		key: build_db_key("hello"),
+		index: 0,
+		value: Some(build_db_val("world"))
+	});
+	tr3.modify(arr.clone(), None, false, Arc::new(move |_| {}));
+	tr3.prepare(Arc::new(move |_| {}));
+	tr3.commit(Arc::new(move |_| {}));
+
+	println!("after insert data");
+
+	// ----------------------
+	// 创建 test 的快照，表名为 test1
+
+	let tr2 = mgr.transaction(true);
+	tr2.snapshot(&Atom::from("test1"), &Atom::from("test"), Arc::new(move |_| {}));
+	tr2.prepare(Arc::new(move |_| {}));
+	tr2.commit(Arc::new(move |_| {}));
+
+	println!("xxxxxx: {:?}", mgr.tab_info(&Atom::from("memery"), &Atom::from("test1")));
+
+	// ---------------------------
+	// 查询快照中是否包含有原来s数据
+	
+	let tr4 = mgr.transaction(true);
+	let mut arr2 = vec![];
+	arr2.push(TabKV {
+		ware: Atom::from("memery"),
+		tab: Atom::from("test1"),
+		key: build_db_key("hello"),
+		index: 0,
+		value: None
+	});
+
+	let query_item = tr4.query(arr2.clone(), None, false, Arc::new(move |_| {}));
+	println!("query item: {:?}", query_item);
+	tr2.prepare(Arc::new(move |_| {}));
+	tr2.commit(Arc::new(move |_| {}));
+
+	// --------------------------
+	// 向 test 中插入另一个数据
+	let tr5 = mgr.transaction(true);
+	let mut arr = vec![];
+	arr.push(TabKV {
+		ware: Atom::from("memery"),
+		tab: Atom::from("test"),
+		key: build_db_key("hello1"),
+		index: 0,
+		value: Some(build_db_val("world1"))
+	});
+	tr5.modify(arr.clone(), None, false, Arc::new(move |_| {}));
+	tr5.prepare(Arc::new(move |_| {}));
+	tr5.commit(Arc::new(move |_| {}));
+
+	// ---------------------------
+	// 查询上一步插入的数据
+	let tr6 = mgr.transaction(true);
+	let mut arr2 = vec![];
+	arr2.push(TabKV {
+		ware: Atom::from("memery"),
+		tab: Atom::from("test"),
+		key: build_db_key("hello1"),
+		index: 0,
+		value: None
+	});
+
+	let query_item = tr6.query(arr2.clone(), None, false, Arc::new(move |_| {}));
+	println!("query item: {:?}", query_item);
+	tr6.prepare(Arc::new(move |_| {}));
+	tr6.commit(Arc::new(move |_| {}));
+
+	// -----------------------
+	// test1 表中不应该包含上一步中插入的数据
+	let tr7 = mgr.transaction(true);
+	let mut arr2 = vec![];
+	arr2.push(TabKV {
+		ware: Atom::from("memery"),
+		tab: Atom::from("test1"), // <===== test1
+		key: build_db_key("hello1"),
+		index: 0,
+		value: None
+	});
+
+	let query_item = tr7.query(arr2.clone(), None, false, Arc::new(move |_| {}));
+	println!("query item should be none: {:?}", query_item);
+	tr7.prepare(Arc::new(move |_| {}));
+	tr7.commit(Arc::new(move |_| {}));
 }
 
 #[test]

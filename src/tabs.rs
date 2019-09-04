@@ -12,9 +12,12 @@ use ordmap::asbtree::{Tree, new};
 use atom::Atom;
 use guid::Guid;
 
+use memery_db::MTab;
+
 use db::{SResult, Tab, TabTxn, OpenTab, Bin, RwLog, TabMeta};
 
 // 表结构及修改日志
+#[derive(Clone)]
 pub struct TabLog<T: Clone + Tab> {
 	map: OrdMap<Tree<Atom, TabInfo<T>>>,
 	old_map: OrdMap<Tree<Atom, TabInfo<T>>>, // 用于判断mgr中tabs是否修改过
@@ -203,7 +206,6 @@ impl<T: Clone + Tab> Iterator for TabIter<T>{
 	}
 }
 
-
 // 表管理器
 pub struct Tabs<T: Clone + Tab> {
 	//全部的表结构
@@ -343,4 +345,22 @@ fn handle_fn<T: Tab>(id: Guid, writable: bool, cb: Box<Fn(SResult<Arc<TabTxn>>)>
 			Err(s) => cb(Err(s))
 		}
 	})
+}
+
+#[test]
+fn test_ordmap() {
+	let mut root = OrdMap::<Tree<String, String>>::new(None);
+	root.upsert("hello".to_string(), "world".to_string(), false);
+	root.upsert("hello2".to_string(), "world2".to_string(), false);
+	root.upsert("hello3".to_string(), "world3".to_string(), false);
+
+	let mut root2 = root.clone();
+	root2.upsert("hello4".to_string(), "world4".to_string(), false);
+	root2.upsert("hello5".to_string(), "world5".to_string(), false);
+
+	root.upsert("hello6".to_string(), "world6".to_string(), false);
+
+	println!("root_count = {:?}, root2_count = {:?}", root.keys(None, false).count(), root2.keys(None, false).count());
+	assert_eq!(root.keys(None, false).count(), 4);
+	assert_eq!(root2.keys(None, false).count(), 5);
 }

@@ -52,15 +52,68 @@ lazy_static! {
 	static ref MEMORY_WARE_CREATE_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("mem_ware_create_count"), 0).unwrap();
 	//内存表创建数量
 	static ref MEMORY_TABLE_CREATE_COUNT: PrefCounter = GLOBAL_PREF_COLLECT.new_static_counter(Atom::from("mem_table_create_count"), 0).unwrap();
+	// 表名对应的 ordmap root
+	static ref MEM_TAB_ROOTS: Arc<Mutex<FnvHashMap<Atom, MTab>>> = Arc::new(Mutex::new(FnvHashMap::with_capacity_and_hasher(0, Default::default())));
 }
 
 #[derive(Clone)]
 pub struct MTab(Arc<Mutex<MemeryTab>>);
+
+impl MTab {
+	fn get_root(&self) -> BinMap {
+		self.0.lock().unwrap().root.clone()
+	}
+
+	fn set_root(&self, root: BinMap) {
+		self.0.lock().unwrap().root = root;
+	}
+}
+
 impl Tab for MTab {
 	fn new(tab: &Atom) -> Self {
 		MEMORY_WARE_CREATE_COUNT.sum(1);
 
-		let tab = MemeryTab {
+		if let Some(mtab) = MEM_TAB_ROOTS.lock().unwrap().get(tab) {
+			let root = mtab.get_root();
+			let tab1 = MemeryTab {
+				prepare: Prepare::new(FnvHashMap::with_capacity_and_hasher(0, Default::default())),
+				root,
+				tab: tab.clone(),
+				trans_count: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_TRANS_COUNT_SUFFIX), 0).unwrap(),
+				prepare_count: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_PREPARE_COUNT_SUFFIX), 0).unwrap(),
+				commit_count: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_COMMIT_COUNT_SUFFIX), 0).unwrap(),
+				rollback_count: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_ROLLBACK_COUNT_SUFFIX), 0).unwrap(),
+				read_count: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_COUNT_SUFFIX), 0).unwrap(),
+				read_byte: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_BYTE_COUNT_SUFFIX), 0).unwrap(),
+				write_count: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_COUNT_SUFFIX), 0).unwrap(),
+				write_byte: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_BYTE_COUNT_SUFFIX), 0).unwrap(),
+				remove_count: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_COUNT_SUFFIX), 0).unwrap(),
+				remove_byte: GLOBAL_PREF_COLLECT.
+					new_dynamic_counter(
+						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_BYTE_COUNT_SUFFIX), 0).unwrap(),
+			};
+			return MTab(Arc::new(Mutex::new(tab1)))
+		}
+
+		let tab1 = MemeryTab {
 			prepare: Prepare::new(FnvHashMap::with_capacity_and_hasher(0, Default::default())),
 			root: OrdMap::new(None),
 			tab: tab.clone(),
@@ -95,7 +148,10 @@ impl Tab for MTab {
 				new_dynamic_counter(
 					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_BYTE_COUNT_SUFFIX), 0).unwrap(),
 		};
-		MTab(Arc::new(Mutex::new(tab)))
+		let mtab = MTab(Arc::new(Mutex::new(tab1)));
+		MEM_TAB_ROOTS.lock().unwrap().insert(tab.clone(), mtab.clone());
+
+		mtab
 	}
 	fn transaction(&self, id: &Guid, writable: bool) -> Arc<TabTxn> {
 		self.0.lock().unwrap().trans_count.sum(1);
@@ -121,10 +177,15 @@ impl DB {
 
 		DB(Arc::new(RwLock::new(Tabs::new())))
 	}
+
+	pub fn get_arc_tabs(&self) -> Arc<RwLock<Tabs<MTab>>> {
+		self.0.clone()
+	}
 }
 impl OpenTab for DB {
 	// 打开指定的表，表必须有meta
 	fn open<'a, T: Tab>(&self, tab: &Atom, _cb: Box<Fn(SResult<T>) + 'a>) -> Option<SResult<T>> {
+		println!("open tab: {:?}", tab);
 		Some(Ok(T::new(tab)))
 	}
 }
@@ -152,6 +213,7 @@ impl Ware for DB {
 }
 
 // 内存库快照
+#[derive(Clone)]
 pub struct DBSnapshot(DB, RefCell<TabLog<MTab>>);
 
 impl WareSnapshot for DBSnapshot {
@@ -176,8 +238,8 @@ impl WareSnapshot for DBSnapshot {
 		self.1.borrow().build(&self.0, tab_name, id, writable, cb)
 	}
 	// 创建一个meta事务
-	fn meta_txn(&self, _id: &Guid) -> Arc<MetaTxn> {
-		Arc::new(MemeryMetaTxn())
+	fn meta_txn(&self, id: &Guid) -> Arc<MetaTxn> {
+		Arc::new(MemeryMetaTxn(self.0.get_arc_tabs()))
 	}
 	// 元信息的预提交
 	fn prepare(&self, id: &Guid) -> SResult<()>{
@@ -650,7 +712,8 @@ impl Iter for MemKeyIter{
 }
 
 #[derive(Clone)]
-pub struct MemeryMetaTxn();
+// pub struct MemeryMetaTxn();
+pub struct MemeryMetaTxn(Arc<RwLock<Tabs<MTab>>>);
 
 impl MetaTxn for MemeryMetaTxn {
 	// 创建表、修改指定表的元数据
@@ -658,7 +721,54 @@ impl MetaTxn for MemeryMetaTxn {
 		Some(Ok(()))
 	}
 	// 快照拷贝表
-	fn snapshot(&self, _tab: &Atom, _from: &Atom, _cb: TxCallback) -> DBResult{
+	fn snapshot(&self, tab: &Atom, from: &Atom, _cb: TxCallback) -> DBResult{
+		// 得到源表元信息
+		let meta = self.0.read().unwrap().get_tab_meta(from)?;
+		// 写入目标表元信息
+		self.0.write().unwrap().set_tab_meta(tab.clone(), meta);
+		// 拷贝 sbtree root
+		let original_mtab_root = MEM_TAB_ROOTS.lock().unwrap().get(from)?.get_root();
+
+		let tab1 = MemeryTab {
+			prepare: Prepare::new(FnvHashMap::with_capacity_and_hasher(0, Default::default())),
+			root: OrdMap::new(None),
+			tab: tab.clone(),
+			trans_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_TRANS_COUNT_SUFFIX), 0).unwrap(),
+			prepare_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_PREPARE_COUNT_SUFFIX), 0).unwrap(),
+			commit_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_COMMIT_COUNT_SUFFIX), 0).unwrap(),
+			rollback_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_ROLLBACK_COUNT_SUFFIX), 0).unwrap(),
+			read_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_COUNT_SUFFIX), 0).unwrap(),
+			read_byte: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_BYTE_COUNT_SUFFIX), 0).unwrap(),
+			write_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_COUNT_SUFFIX), 0).unwrap(),
+			write_byte: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_BYTE_COUNT_SUFFIX), 0).unwrap(),
+			remove_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_COUNT_SUFFIX), 0).unwrap(),
+			remove_byte: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_BYTE_COUNT_SUFFIX), 0).unwrap(),
+		};
+
+		let mtab = MTab(Arc::new(Mutex::new(tab1)));
+		mtab.set_root(original_mtab_root);
+		MEM_TAB_ROOTS.lock().unwrap().insert(tab.clone(), mtab);
+		
 		Some(Ok(()))
 	}
 	// 修改指定表的名字
