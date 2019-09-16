@@ -73,85 +73,7 @@ impl Tab for MTab {
 	fn new(tab: &Atom) -> Self {
 		MEMORY_WARE_CREATE_COUNT.sum(1);
 
-		if let Some(mtab) = MEM_TAB_ROOTS.lock().unwrap().get(tab) {
-			let root = mtab.get_root();
-			let tab1 = MemeryTab {
-				prepare: Prepare::new(FnvHashMap::with_capacity_and_hasher(0, Default::default())),
-				root,
-				tab: tab.clone(),
-				trans_count: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_TRANS_COUNT_SUFFIX), 0).unwrap(),
-				prepare_count: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_PREPARE_COUNT_SUFFIX), 0).unwrap(),
-				commit_count: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_COMMIT_COUNT_SUFFIX), 0).unwrap(),
-				rollback_count: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_ROLLBACK_COUNT_SUFFIX), 0).unwrap(),
-				read_count: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_COUNT_SUFFIX), 0).unwrap(),
-				read_byte: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_BYTE_COUNT_SUFFIX), 0).unwrap(),
-				write_count: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_COUNT_SUFFIX), 0).unwrap(),
-				write_byte: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_BYTE_COUNT_SUFFIX), 0).unwrap(),
-				remove_count: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_COUNT_SUFFIX), 0).unwrap(),
-				remove_byte: GLOBAL_PREF_COLLECT.
-					new_dynamic_counter(
-						Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_BYTE_COUNT_SUFFIX), 0).unwrap(),
-			};
-			return MTab(Arc::new(Mutex::new(tab1)))
-		}
-
-		let tab1 = MemeryTab {
-			prepare: Prepare::new(FnvHashMap::with_capacity_and_hasher(0, Default::default())),
-			root: OrdMap::new(None),
-			tab: tab.clone(),
-			trans_count: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_TRANS_COUNT_SUFFIX), 0).unwrap(),
-			prepare_count: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_PREPARE_COUNT_SUFFIX), 0).unwrap(),
-			commit_count: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_COMMIT_COUNT_SUFFIX), 0).unwrap(),
-			rollback_count: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_ROLLBACK_COUNT_SUFFIX), 0).unwrap(),
-			read_count: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_COUNT_SUFFIX), 0).unwrap(),
-			read_byte: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_BYTE_COUNT_SUFFIX), 0).unwrap(),
-			write_count: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_COUNT_SUFFIX), 0).unwrap(),
-			write_byte: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_BYTE_COUNT_SUFFIX), 0).unwrap(),
-			remove_count: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_COUNT_SUFFIX), 0).unwrap(),
-			remove_byte: GLOBAL_PREF_COLLECT.
-				new_dynamic_counter(
-					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_BYTE_COUNT_SUFFIX), 0).unwrap(),
-		};
-		let mtab = MTab(Arc::new(Mutex::new(tab1)));
-		MEM_TAB_ROOTS.lock().unwrap().insert(tab.clone(), mtab.clone());
-
-		mtab
+		MEM_TAB_ROOTS.lock().unwrap().get(tab).unwrap().clone()
 	}
 	fn transaction(&self, id: &Guid, writable: bool) -> Arc<TabTxn> {
 		self.0.lock().unwrap().trans_count.sum(1);
@@ -717,7 +639,47 @@ pub struct MemeryMetaTxn(Arc<RwLock<Tabs<MTab>>>);
 
 impl MetaTxn for MemeryMetaTxn {
 	// 创建表、修改指定表的元数据
-	fn alter(&self, _tab: &Atom, _meta: Option<Arc<TabMeta>>, _cb: TxCallback) -> DBResult{
+	fn alter(&self, tab: &Atom, _meta: Option<Arc<TabMeta>>, _cb: TxCallback) -> DBResult{
+		// println!("MetaTxn::alter ------- start tab: {:?}, tab_meta: {:?}", _tab, _meta);
+
+		let tab1 = MemeryTab {
+			prepare: Prepare::new(FnvHashMap::with_capacity_and_hasher(0, Default::default())),
+			root: OrdMap::new(None),
+			tab: tab.clone(),
+			trans_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_TRANS_COUNT_SUFFIX), 0).unwrap(),
+			prepare_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_PREPARE_COUNT_SUFFIX), 0).unwrap(),
+			commit_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_COMMIT_COUNT_SUFFIX), 0).unwrap(),
+			rollback_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_ROLLBACK_COUNT_SUFFIX), 0).unwrap(),
+			read_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_COUNT_SUFFIX), 0).unwrap(),
+			read_byte: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_READ_BYTE_COUNT_SUFFIX), 0).unwrap(),
+			write_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_COUNT_SUFFIX), 0).unwrap(),
+			write_byte: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_WRITE_BYTE_COUNT_SUFFIX), 0).unwrap(),
+			remove_count: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_COUNT_SUFFIX), 0).unwrap(),
+			remove_byte: GLOBAL_PREF_COLLECT.
+				new_dynamic_counter(
+					Atom::from(MEMORY_TABLE_PREFIX.to_string() + tab + MEMORY_TABLE_REMOVE_BYTE_COUNT_SUFFIX), 0).unwrap(),
+		};
+		let mtab = MTab(Arc::new(Mutex::new(tab1)));
+		MEM_TAB_ROOTS.lock().unwrap().insert(tab.clone(), mtab.clone());
+
 		Some(Ok(()))
 	}
 	// 快照拷贝表

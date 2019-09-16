@@ -150,8 +150,8 @@ impl Statistics {
 pub struct Tr(Arc<Mutex<Tx>>);
 
 impl Tr {
-	pub fn snapshot(&self, tab: &Atom, from: &Atom, cb: TxCallback) -> DBResult {
-		self.0.lock().unwrap().snapshot(tab, from, cb)
+	pub fn snapshot(&self, ware: &Atom, tab: &Atom, from: &Atom, cb: TxCallback) -> DBResult {
+		self.0.lock().unwrap().snapshot(ware, tab, from, cb)
 	}
 	// 判断事务是否可写
 	pub fn is_writable(&self) -> bool {
@@ -479,14 +479,14 @@ struct Tx {
 impl Tx {
 	// 快照
 	// NOTE: 需不要传库名参数
-	fn snapshot(&self, tab: &Atom, from: &Atom, cb: TxCallback) -> DBResult {
-		for ws in self.ware_log_map.values() {
-			ws.meta_txn(&self.id).snapshot(tab, from, cb.clone())?;
+	fn snapshot(&self, ware: &Atom, tab: &Atom, from: &Atom, cb: TxCallback) -> DBResult {
+		match self.ware_log_map.get(ware) {
+			Some(ware) => {
+				let res = ware.meta_txn(&self.id).snapshot(tab, from, cb.clone());
+				Some(Ok(()))
+			}
+			None => None
 		}
-		// let waresnapshot = self.ware_log_map.get(ware).unwrap();
-		// let meta_txn = waresnapshot.meta_txn(&self.id);
-		// meta_txn.snapshot(tab, from, cb)
-		Some(Ok(()))
 	}
 	// 预提交事务
 	fn prepare(&mut self, tr: &Tr, cb: TxCallback) -> DBResult {
@@ -1277,7 +1277,7 @@ fn test_snapshot() {
 	// 创建 test 的快照，表名为 test1
 
 	let tr2 = mgr.transaction(true);
-	tr2.snapshot(&Atom::from("test1"), &Atom::from("test"), Arc::new(move |_| {}));
+	tr2.snapshot(&Atom::from("memery"), &Atom::from("test1"), &Atom::from("test"), Arc::new(move |_| {}));
 	tr2.prepare(Arc::new(move |_| {}));
 	tr2.commit(Arc::new(move |_| {}));
 
