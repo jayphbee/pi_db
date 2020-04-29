@@ -73,7 +73,14 @@ impl<T: Clone + Tab> TabLog<T> {
 				}
 			}
 		};
+		println!("alter --- tab_name = {:?}, delete = {:?}", tab_name, meta.is_none());
+
 		self.map.action(&src_name, &mut f);
+		if meta.is_some() {
+			assert!(self.map.get(&tab_name.clone()).is_some());
+		} else {
+			assert!(self.map.get(&tab_name.clone()).is_none());
+		}
 		self.alter_logs.entry((src_name, ver)).or_insert(meta.clone());
 		self.meta_names.insert(tab_name.clone());
 	}
@@ -263,6 +270,7 @@ impl<T: Clone + Tab> Tabs<T> {
 
 	// 预提交
 	pub fn prepare(&mut self, id: &Guid, log: &mut TabLog<T>) -> SResult<()> {
+
 		// 先检查预提交的交易是否有冲突
 		for val in self.prepare.values() {
 			if !val.meta_names.is_disjoint(&log.meta_names) {
@@ -299,14 +307,18 @@ impl<T: Clone + Tab> Tabs<T> {
 				// 否则，重新执行一遍修改
 				for r in log.alter_logs {
 					if r.1.is_none() {
+						println!("commit self.map delete {:?}, guid = {:?}", r.0, id);
 						self.map.delete(&Atom::from((r.0).0.as_ref()), false);
 					} else {
+						println!("commit self.map insert {:?}, guid = {:?}", r.0, id);
 						let tab_info = TabInfo::new(r.1.unwrap());
 						self.map.upsert(Atom::from((r.0).0.as_ref()), tab_info, false);
 					}
 				}
 			}
-			_ => ()
+			_ => {
+				unreachable!();
+			}
 		}
 	}
 	// 回滚
