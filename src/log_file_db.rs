@@ -816,11 +816,13 @@ impl AsyncLogFileStore {
 			id = self.log_file.append(LogMethod::PlainAppend, key, value);
 		}
 
+		let start = std::time::Instant::now();
 		match self.log_file.delay_commit(id, false, 0).await {
 			Ok(_) => {
 				for (key, value) in pairs {
 					self.map.lock().insert(key.to_vec(), value.clone().into());
 				}
+				println!("delay_commit time = {:?}", start.elapsed());
 				Ok(())
 			}
 			Err(e) => {
