@@ -14,7 +14,7 @@ use guid::Guid;
 use hash::{XHashMap, XHashSet};
 use r#async::lock::mutex_lock::Mutex;
 use r#async::lock::rw_lock::RwLock;
-use pi_store::log_store::log_file::{read_log_paths, read_log_file, read_log_file_block, PairLoader, LogMethod, LogFile};
+use pi_store::log_store::log_file::{read_log_paths, read_log_block, PairLoader, LogMethod, LogFile};
 use r#async::rt::multi_thread::{MultiTaskPool, MultiTaskRuntime};
 use r#async::rt::{AsyncRuntime, AsyncValue};
 use r#async::lock::spin_lock::SpinLock;
@@ -52,7 +52,7 @@ impl LogFileDB {
 	*/
 	pub async fn new(db_path: Atom, db_size: usize) -> Self {
 		if !Path::new(&db_path.to_string()).exists() {
-			let _ = fs::create_dir(db_path.to_string());
+            let _ = fs::create_dir(db_path.to_string());
 		}
 
 		// 从元信息表加载所有表元信息
@@ -79,7 +79,7 @@ impl LogFileDB {
 			statistics: Arc::new(SpinLock::new(VecDeque::new())),
 		};
 
-		file.load(&mut store, None, 32 * 1024, true).await;
+		file.load(&mut store, None, false).await;
 		store.is_init.store(false, Ordering::SeqCst);
 
 		let mut tabs = Tabs::new();
@@ -135,19 +135,6 @@ impl LogFileDB {
 		}
 	}
 
-	pub async fn force_split() -> SResult<()> {
-		let meta = LogFileDB::open(&Atom::from(DB_META_TAB_NAME)).await.unwrap();
-		let map = meta.1.map.lock().clone();
-
-		for (key, _) in map.iter() {
-			let tab_name = Atom::decode(&mut ReadBuffer::new(key, 0)).unwrap();
-			let mut file = LogFileDB::open(&tab_name).await.unwrap();
-			file.1.log_file.split().await;
-		}
-
-		Ok(())
-	}
-
 	//异步整理所有LogFileTab
 	pub async fn collect() -> SResult<()> {
 		//获取LogFileDB的元信息
@@ -172,7 +159,7 @@ impl LogFileDB {
 				}
 
 				let f = *log_len as f64 / *key_len as f64;
-				if f < 1.5 {
+				if f < 2.0 {
 					//当前只读日志文件的关键字重复率未达限制，则立即停止选择，并准备整理已选择的只读日志文件
 					break; //TODO 后续还要判断分叉的分裂点，除了分裂点为最大的只读日志文件外，其它分裂点将无法选择作为整理的只读日志文件，至到对应分裂点的分叉表被删除...
 				}
@@ -183,7 +170,7 @@ impl LogFileDB {
 			}
 
 			//整理需要整理的只读日志文件
-			if let Err(e) = file.1.log_file.collect_logs(remove_logs, collect_logs, 1024 * 1024, 32 * 1024, false).await {
+			if let Err(e) = file.1.log_file.collect_logs(remove_logs, collect_logs, 1024 * 1024, false).await {
 				//整理指定的LogFileTab失败，则立即退出整理
 				return Err(format!("Collect LogFileTab failed, tab: {}, reason: {:?}", tab_name.as_str(), e));
 			}
@@ -202,7 +189,6 @@ impl LogFileDB {
 			if let Ok(mut log_paths) = read_log_paths(&file.1.log_file).await {
 				//从大到小的分析整理后的日志文件，并更新LogFileTab的统计信息
 				let mut offset = None;
-				let mut read_len = 32 * 1024;
 				let rt = STORE_RUNTIME.read().await.as_ref().unwrap().clone();
 				while let Some(log_path) = log_paths.pop() {
 					let log_file = match AsyncFile::open(rt.clone(), log_path.clone(), AsyncFileOptions::OnlyRead).await {
@@ -217,44 +203,39 @@ impl LogFileDB {
 					};
 
 					loop {
-						match read_log_file(log_path.clone(),
-											log_file.clone(),
-											offset,
-											read_len).await {
+						let mut logs = LinkedList::default();
+						match read_log_block(&rt,
+											 &log_path,
+											 &log_file,
+											 offset,
+											 false).await {
 							Err(e) => {
 								error!("Statistic failed after collected, tab: {}, reason: {:?}", tab_name.as_str(), e);
 							},
-							Ok((file_offset, bin)) => {
-								match read_log_file_block(log_path.clone(),
-														  &bin,
-														  file_offset,
-														  read_len,
-														  true) {
-									Err(e) => {
-										error!("Statistic failed after collected, tab: {}, reason: {:?}", tab_name.as_str(), e);
-									},
-									Ok((next_file_offset, next_len, logs)) => {
-										//分析当前只读日志文件的日志块，并更新当前只读日志文件的统计信息
-										for (method, key, value) in logs {
-											if file.1.is_require(Some(&log_path), &key) {
-												//需要分析的关键字
-												file.1.load(Some(&log_path), method, key, value);
-											}
-										}
-
-										if next_file_offset == 0 {
-											//已读到日志文件头，则继续下一个日志文件的读取
-											offset = None;
-											read_len = 3 * 1024;
-											break;
-										} else {
-											//更新日志文件位置
-											offset = Some(next_file_offset);
-											read_len = next_len;
-										}
-									},
+							Ok((next, list)) => {
+								if next == 0 {
+									//已读到日志文件头，则重置文件偏移
+									offset = None;
+								} else {
+									//更新日志文件位置，则返回当前日志文件的下一个日志块
+									offset = Some(next);
 								}
+
+								logs = list;
 							},
+						}
+
+						//分析当前只读日志文件的日志块，并更新当前只读日志文件的统计信息
+						for (method, key, value) in logs {
+							if file.1.is_require(Some(&log_path), &key) {
+								//需要分析的关键字
+								file.1.load(Some(&log_path), method, key, value);
+							}
+						}
+
+						if offset.is_none() {
+							//继续下一个日志文件的读取
+							break;
 						}
 					}
 				}
@@ -684,11 +665,11 @@ impl RefLogFileTxn {
 
 			value_arr.push(
 				TabKV{
-					ware: tabkv.ware.clone(),
-					tab: tabkv.tab.clone(),
-					key: tabkv.key.clone(),
-					index: tabkv.index.clone(),
-					value: value,
+				ware: tabkv.ware.clone(),
+				tab: tabkv.tab.clone(),
+				key: tabkv.key.clone(),
+				index: tabkv.index.clone(),
+				value: value,
 				}
 			)
 		}
@@ -789,8 +770,8 @@ pub struct MemIter{
 
 impl Drop for MemIter{
 	fn drop(&mut self) {
-		unsafe{Box::from_raw(self.point as *mut <Tree<Bin, Bin> as OIter<'_>>::IterType)};
-	}
+        unsafe{Box::from_raw(self.point as *mut <Tree<Bin, Bin> as OIter<'_>>::IterType)};
+    }
 }
 
 impl MemIter{
@@ -827,8 +808,8 @@ pub struct MemKeyIter{
 
 impl Drop for MemKeyIter{
 	fn drop(&mut self) {
-		unsafe{Box::from_raw(self.point as *mut Keys<'_, Tree<Bin, Bin>>)};
-	}
+        unsafe{Box::from_raw(self.point as *mut Keys<'_, Tree<Bin, Bin>>)};
+    }
 }
 
 impl MemKeyIter{
@@ -982,7 +963,7 @@ unsafe impl Send for AsyncLogFileStore {}
 unsafe impl Sync for AsyncLogFileStore {}
 
 impl PairLoader for AsyncLogFileStore {
-	fn is_require(&self, log_file: Option<&PathBuf>, key: &Vec<u8>) -> bool {
+    fn is_require(&self, log_file: Option<&PathBuf>, key: &Vec<u8>) -> bool {
 		let b = !self.removed.lock().contains_key(key) && !self.tmp_map.lock().contains_key(key);
 
 		if self.is_statistics.load(Ordering::Relaxed) {
@@ -1045,9 +1026,9 @@ impl PairLoader for AsyncLogFileStore {
 		}
 
 		b
-	}
+    }
 
-	fn load(&mut self, log_file: Option<&PathBuf>, method: LogMethod, key: Vec<u8>, value: Option<Vec<u8>>) {
+    fn load(&mut self, log_file: Option<&PathBuf>, method: LogMethod, key: Vec<u8>, value: Option<Vec<u8>>) {
 		if self.is_statistics.load(Ordering::Relaxed) {
 			//需要统计
 			let mut init = false;
@@ -1088,15 +1069,15 @@ impl PairLoader for AsyncLogFileStore {
 		} else {
 			self.removed.lock().insert(key, ());
 		}
-	}
+    }
 }
 
 impl AsyncLogFileStore {
 	pub async fn open<P: AsRef<Path> + std::fmt::Debug>(path: P, buf_len: usize, file_len: usize, log_file_index: Option<usize>) -> Result<LogFile> {
 		// println!("AsyncLogFileStore open ====== {:?}, log_index = {:?}", path, log_file_index);
 		match LogFile::open(STORE_RUNTIME.read().await.as_ref().unwrap().clone(), path, buf_len, file_len, log_file_index).await {
-			Err(e) =>panic!("LogFile::open error {:?}", e),
-			Ok(file) => Ok(file),
+            Err(e) =>panic!("LogFile::open error {:?}", e),
+            Ok(file) => Ok(file),
 		}
 	}
 
@@ -1123,25 +1104,25 @@ impl AsyncLogFileStore {
 	}
 
 	pub async fn write(&self, key: Vec<u8>, value: Vec<u8>) -> Result<Option<Vec<u8>>> {
-		let id = self.log_file.append(LogMethod::PlainAppend, key.as_ref(), value.as_ref());
-		if let Err(e) = self.log_file.delay_commit(id, false, 0).await {
-			Err(e)
-		} else {
-			if let Some(value) = self.map.lock().insert(key, value.into()) {
-				//更新指定key的存储数据，则返回更新前的存储数据
-				Ok(Some(value.to_vec()))
-			} else {
-				Ok(None)
-			}
-		}
+        let id = self.log_file.append(LogMethod::PlainAppend, key.as_ref(), value.as_ref());
+        if let Err(e) = self.log_file.delay_commit(id, false, 0).await {
+            Err(e)
+        } else {
+            if let Some(value) = self.map.lock().insert(key, value.into()) {
+                //更新指定key的存储数据，则返回更新前的存储数据
+                Ok(Some(value.to_vec()))
+            } else {
+                Ok(None)
+            }
+        }
 	}
-
+	
 	pub fn read(&self, key: &[u8]) -> Option<Arc<[u8]>> {
-		if let Some(value) = self.map.lock().get(key) {
-			return Some(value.clone())
-		}
+        if let Some(value) = self.map.lock().get(key) {
+            return Some(value.clone())
+        }
 
-		None
+        None
 	}
 
 	pub async fn remove_batch(&self, keys: &[&[u8]]) -> Result<()> {
@@ -1162,24 +1143,24 @@ impl AsyncLogFileStore {
 	}
 
 	pub async fn remove(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-		let id = self.log_file.append(LogMethod::Remove, key.as_ref(), &[]);
-		if let Err(e) = self.log_file.delay_commit(id, false, 0).await {
-			Err(e)
-		} else {
-			if let Some(value) = self.map.lock().remove(&key) {
-				Ok(Some(value.to_vec()))
-			} else {
-				Ok(None)
-			}
-		}
-	}
+        let id = self.log_file.append(LogMethod::Remove, key.as_ref(), &[]);
+        if let Err(e) = self.log_file.delay_commit(id, false, 0).await {
+            Err(e)
+        } else {
+            if let Some(value) = self.map.lock().remove(&key) {
+                Ok(Some(value.to_vec()))
+            } else {
+                Ok(None)
+            }
+        }
+    }
 
-	pub fn last_key(&self) -> Option<Vec<u8>> {
-		self.map.lock().iter().last().map(|(k, _)| {
-			k.clone()
-		})
+    pub fn last_key(&self) -> Option<Vec<u8>> {
+        self.map.lock().iter().last().map(|(k, _)| {
+            k.clone()
+        })
 	}
-
+	
 	/// 强制产生分裂
 	pub async fn force_fork(&self) -> Result<usize> {
 		self.log_file.split().await
@@ -1233,7 +1214,7 @@ impl LogFileTab {
 			statistics: Arc::new(SpinLock::new(VecDeque::new())),
 		};
 
-		file.load(&mut store, Some(path), 32 * 1024, true).await;
+		file.load(&mut store, Some(path), false).await;
 		let mut root= OrdMap::<Tree<Bon, Bin>>::new(None);
 		let mut load_size = 0;
 		let map = store.map.lock();
@@ -1261,12 +1242,12 @@ impl LogFileTab {
 				is_init: Arc::new(AtomicBool::new(true)),
 				statistics: Arc::new(SpinLock::new(VecDeque::new())),
 			};
-
+	
 			let mut path = PathBuf::new();
 			path.push(tm.tab_name.clone().as_ref());
 			path.push(format!("{:0>width$}", log_file_id.unwrap()-1, width = 6));
-			file.load(&mut store, Some(path), 32 * 1024, true).await;
-
+			file.load(&mut store, Some(path), false).await;
+	
 			let mut load_size = 0;
 			let start_time = Instant::now();
 			let map = store.map.lock();
