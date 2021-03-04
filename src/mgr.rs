@@ -121,13 +121,9 @@ impl Mgr {
 	*/
 	pub async fn transaction(&self, writable: bool, rt: Option<MultiTaskRuntime<()>>) -> Tr {
 		let id = self.guid.gen(0);
-		let ware_map = {
-			self.ware_map.lock().await.clone()
-		};
-
-		let mut map = XHashMap::with_capacity_and_hasher(ware_map.0.size() * 3 / 2, Default::default());
+		let mut map = XHashMap::default();
 		let mut tmp = vec![];
-		for Entry(k, v) in ware_map.0.iter(None, false) {
+		for Entry(k, v) in self.ware_map.lock().await.0.iter(None, false) {
 			tmp.push((k.clone(), v));
 		}
 
@@ -186,10 +182,7 @@ impl Mgr {
 	* @returns 库信息
 	*/
 	pub async fn find(&self, ware_name: &Atom) -> Option<Arc<DatabaseWare>> {
-		let map = {
-			self.ware_map.lock().await.clone()
-		};
-		map.find(ware_name)
+		self.ware_map.lock().await.find(ware_name)
 	}
 }
 
