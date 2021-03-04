@@ -21,8 +21,8 @@ use crate::log_file_db::{LogFileTab, RefLogFileTxn};
 use crate::log_file_db::LogFileDB;
 
 pub enum TxnType {
-	MemTxn(Arc<RefMemeryTxn>),
-	LogFileTxn(Arc<RefLogFileTxn>)
+	MemTxn(RefMemeryTxn),
+	LogFileTxn(RefLogFileTxn)
 }
 // 表结构及修改日志
 pub struct TabLog {
@@ -131,10 +131,10 @@ impl TabLog {
 				// 根据结果创建事务或返回错误
 				match tab {
 					TabType::MemTab(t) => {
-						Ok(TxnType::MemTxn(Arc::new(t.transaction(&id, writable).await)))
+						Ok(TxnType::MemTxn(t.transaction(&id, writable).await))
 					}
 					TabType::LogFileTab(t) => {
-						Ok(TxnType::LogFileTxn(Arc::new(t.transaction(&id, writable).await)))
+						Ok(TxnType::LogFileTxn(t.transaction(&id, writable).await))
 					}
 					TabType::Unkonwn => Err(String::from("unknown tab type"))
 				}

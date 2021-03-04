@@ -503,9 +503,9 @@ impl DatabaseWare {
 */
 pub enum DatabaseTabTxn {
 	// 内存表事务
-	MemTabTxn(Arc<RefMemeryTxn>),
+	MemTabTxn(RefMemeryTxn),
 	// 日志文件表事务
-	LogFileTabTxn(Arc<RefLogFileTxn>)
+	LogFileTabTxn(RefLogFileTxn)
 }
 
 impl DatabaseTabTxn {
@@ -515,7 +515,7 @@ impl DatabaseTabTxn {
 	* @returns 内存表事务
 	*/
 	fn new_mem_tab_txn(txn: RefMemeryTxn) -> DatabaseTabTxn {
-		DatabaseTabTxn::MemTabTxn(Arc::new(txn))
+		DatabaseTabTxn::MemTabTxn(txn)
 	}
 
 	/**
@@ -524,7 +524,7 @@ impl DatabaseTabTxn {
 	* @returns 文件表事务
 	*/
 	fn new_log_file_tab_txn(txn: RefLogFileTxn) -> DatabaseTabTxn {
-		DatabaseTabTxn::LogFileTabTxn(Arc::new(txn))
+		DatabaseTabTxn::LogFileTabTxn(txn)
 	}
 
 	/**
