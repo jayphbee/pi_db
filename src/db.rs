@@ -188,6 +188,9 @@ pub enum RwLog {
 	Meta(Option<Bin>),
 }
 
+unsafe impl Send for RwLog {}
+unsafe impl Sync for RwLog {}
+
 //为了按照Bon协议比较字节数组， 定义了类型Bon
 #[derive(Default, Clone, Hash)]
 pub struct Bon(Arc<Vec<u8>>);

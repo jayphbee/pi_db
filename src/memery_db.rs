@@ -1,5 +1,5 @@
 
-use std::sync::Arc;
+use std::{cell::UnsafeCell, sync::Arc};
 use std::mem;
 
 use hash::XHashMap;
@@ -98,10 +98,10 @@ impl MTab {
 		};
 		MTab(Arc::new(Mutex::new(tab)))
 	}
-	pub async fn transaction(&self, id: &Guid, writable: bool) -> RefMemeryTxn {
+	pub async fn transaction(&self, id: &Guid, writable: bool) -> MemTabTxn {
 		self.0.lock().await.trans_count.sum(1);
 
-		MemeryTxn::new(self.clone(), id, writable).await
+		MemTabTxn::new(self.clone(), id, writable).await
 	}
 }
 
@@ -196,123 +196,122 @@ impl MemDBSnapshot {
 	pub fn notify(&self, _event: Event) {}
 }
 
-// 内存事务
-pub struct MemeryTxn {
+// 内存表事务
+pub struct MemTabTxn {
+	mem_tab_handle: MTab,
+	inner: Arc<UnsafeCell<MemTabTxnInner>>,
+}
+
+unsafe impl Send for MemTabTxn {}
+unsafe impl Sync for MemTabTxn {}
+
+struct MemTabTxnInner {
 	id: Guid,
 	writable: bool,
-	tab: MTab,
 	root: BinMap,
 	old: BinMap,
 	rwlog: XHashMap<Bin, RwLog>,
 	state: TxState,
 }
 
-pub struct RefMemeryTxn(Mutex<MemeryTxn>);
+unsafe impl Send for MemTabTxnInner {}
+unsafe impl Sync for MemTabTxnInner {}
 
-impl MemeryTxn {
+impl MemTabTxn {
 	//开始事务
-	pub async fn new(tab: MTab, id: &Guid, writable: bool) -> RefMemeryTxn {
+	pub async fn new(tab: MTab, id: &Guid, writable: bool) -> MemTabTxn {
 		let root = tab.0.lock().await.root.clone();
-		let txn = MemeryTxn {
+		let inner = MemTabTxnInner {
 			id: id.clone(),
 			writable,
 			root: root.clone(),
-			tab,
 			old: root,
-			rwlog: XHashMap::with_capacity_and_hasher(0, Default::default()),
+			rwlog: XHashMap::default(),
 			state: TxState::Ok,
 		};
-		return RefMemeryTxn(Mutex::new(txn))
+
+		MemTabTxn {
+			mem_tab_handle: tab,
+			inner: Arc::new(UnsafeCell::new(inner)),
+		}
 	}
 	//获取数据
-	pub async fn get(&mut self, key: Bin) -> Option<Bin> {
-		self.tab.0.lock().await.read_count.sum(1);
+	pub fn get(&self, key: Bin) -> Option<Bin> {
+		let inner = unsafe { &mut *self.inner.get() };
 
-		match self.root.get(&Bon::new(key.clone())) {
+		match inner.root.get(&Bon::new(key.clone())) {
 			Some(v) => {
-				if self.writable {
-					match self.rwlog.get(&key) {
+				if inner.writable {
+					match inner.rwlog.get(&key) {
 						Some(_) => (),
 						None => {
-							&mut self.rwlog.insert(key, RwLog::Read);
-							()
+							inner.rwlog.insert(key, RwLog::Read);
 						}
 					}
 				}
-
-				self.tab.0.lock().await.read_byte.sum(v.len());
-
 				return Some(v.clone())
 			},
 			None => return None
 		}
+
+
 	}
 	//插入/修改数据
-	pub async fn upsert(&mut self, key: Bin, value: Bin) -> DBResult {
-		self.root.upsert(Bon::new(key.clone()), value.clone(), false);
-		self.rwlog.insert(key.clone(), RwLog::Write(Some(value.clone())));
-
-		{
-			let tab = self.tab.0.lock().await;
-			tab.write_byte.sum(value.len());
-			tab.write_count.sum(1);
-		}
+	pub fn upsert(&self, key: Bin, value: Bin) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
+		inner.root.upsert(Bon::new(key.clone()), value.clone(), false);
+		inner.rwlog.insert(key.clone(), RwLog::Write(Some(value.clone())));
 
 		Ok(())
 	}
 	//删除
-	pub async fn delete(&mut self, key: Bin) -> DBResult {
-		if let Some(Some(value)) = self.root.delete(&Bon::new(key.clone()), false) {
-			{
-				let tab = self.tab.0.lock().await;
-				tab.remove_byte.sum(key.len() + value.len());
-				tab.remove_count.sum(1);
-			}
-		}
-		self.rwlog.insert(key, RwLog::Write(None));
+	pub fn delete(&self, key: Bin) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
+		inner.root.delete(&Bon::new(key.clone()), false);
+		inner.rwlog.insert(key, RwLog::Write(None));
 
 		Ok(())
 	}
 
 	//预提交
-	pub async fn prepare_inner(&mut self) -> DBResult {
-		// let mut tab = self.tab.0.lock().await;
+	pub async fn prepare_inner(&self) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
 		//遍历事务中的读写日志
-		for (key, rw_v) in self.rwlog.iter() {
+		for (key, rw_v) in inner.rwlog.iter() {
 			//检查预提交是否冲突
-			match self.tab.0.lock().await.prepare.try_prepare(key, rw_v) {
+			match self.mem_tab_handle.0.lock().await.prepare.try_prepare(key, rw_v) {
 				Ok(_) => (),
 				Err(s) => return Err(s),
 			};
 			//检查Tab根节点是否改变
-			if self.tab.0.lock().await.root.ptr_eq(&self.old) == false {
+			if inner.root.ptr_eq(&inner.old) == false {
 				let key = Bon::new(key.clone());
-				match self.tab.0.lock().await.root.get(&key) {
-					Some(r1) => match self.old.get(&key) {
+				match inner.root.get(&key) {
+					Some(r1) => match inner.old.get(&key) {
 						Some(r2) if (r1 as *const Bin) == (r2 as *const Bin) => (),
 						_ => return Err(String::from("prepare conflicted value diff"))
 					},
-					_ => match self.old.get(&key) {
+					_ => match inner.old.get(&key) {
 						None => (),
 						_ => return Err(String::from("prepare conflicted old not None"))
 					}
 				}
 			}
 		}
-		let rwlog = mem::replace(&mut self.rwlog, XHashMap::with_capacity_and_hasher(0, Default::default()));
+		let rwlog = mem::replace(&mut inner.rwlog, XHashMap::default());
 		//写入预提交
-		self.tab.0.lock().await.prepare.insert(self.id.clone(), rwlog);
-
-		self.tab.0.lock().await.prepare_count.sum(1);
+		self.mem_tab_handle.0.lock().await.prepare.insert(inner.id.clone(), rwlog);
 
 		return Ok(())
 	}
 	//提交
-	pub async fn commit_inner(&mut self) -> CommitResult {
-		let logs = self.tab.0.lock().await.prepare.remove(&self.id);
+	pub async fn commit_inner(&self) -> CommitResult {
+		let mut lock = self.mem_tab_handle.0.lock().await;
+		let inner = unsafe { &mut *self.inner.get() };
+		let logs = lock.prepare.remove(&inner.id);
 		let logs = match logs {
 			Some(rwlog) => {
-				let root_if_eq = self.tab.0.lock().await.root.ptr_eq(&self.old);
+				let root_if_eq = inner.root.ptr_eq(&inner.old);
 				//判断根节点是否相等
 				if !root_if_eq {
 					for (k, rw_v) in rwlog.iter() {
@@ -322,82 +321,83 @@ impl MemeryTxn {
 								let k = Bon::new(k.clone());
 								match rw_v {
 									RwLog::Write(None) => {
-										self.tab.0.lock().await.root.delete(&k, false);
+										inner.root.delete(&k, false);
 									},
 									RwLog::Write(Some(v)) => {
-										self.tab.0.lock().await.root.upsert(k.clone(), v.clone(), false);
+										inner.root.upsert(k.clone(), v.clone(), false);
 									},
 									_ => (),
 								}
-								()
 							},
 						}
 					}
 				} else {
-					self.tab.0.lock().await.root = self.root.clone();
+					lock.root = inner.root.clone();
 				}
 				rwlog
 			},
 			None => return Err(String::from("error prepare null"))
 		};
 
-		self.tab.0.lock().await.commit_count.sum(1);
-
 		Ok(logs)
 	}
 	//回滚
-	pub async fn rollback_inner(&mut self) -> DBResult {
-		let mut tab = self.tab.0.lock().await;
-		tab.prepare.remove(&self.id);
-
-		tab.rollback_count.sum(1);
+	pub async fn rollback_inner(&self) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
+		let mut tab = self.mem_tab_handle.0.lock().await;
+		tab.prepare.remove(&inner.id);
 
 		Ok(())
 	}
-}
 
-impl RefMemeryTxn {
 	// 获得事务的状态
-	pub async fn get_state(&self) -> TxState {
-		self.0.lock().await.state.clone()
+	pub fn get_state(&self) -> TxState {
+		let inner = unsafe { &*self.inner.get() };
+		inner.state.clone()
 	}
 	// 预提交一个事务
 	pub async fn prepare(&self, _timeout: usize) -> DBResult {
-		let mut txn = self.0.lock().await;
-		txn.state = TxState::Preparing;
-		match txn.prepare_inner().await {
+		let inner = unsafe { &mut *self.inner.get() };
+		inner.state = TxState::Preparing;
+		match self.prepare_inner().await {
 			Ok(()) => {
-				txn.state = TxState::PreparOk;
+				inner.state = TxState::PreparOk;
 				return Ok(())
 			},
 			Err(e) => {
-				txn.state = TxState::PreparFail;
+				inner.state = TxState::PreparFail;
 				return Err(e.to_string())
 			},
 		}
 	}
 	// 提交一个事务
 	pub async fn commit(&self) -> CommitResult {
-		let mut txn = self.0.lock().await;
-		txn.state = TxState::Committing;
-		match txn.commit_inner().await {
+		// let inner = unsafe { &mut *self.inner.get() };
+		// inner.state = TxState::Committing;
+		match self.commit_inner().await {
 			Ok(log) => {
-				txn.state = TxState::Commited;
+				// inner.state = TxState::Commited;
 				return Ok(log)
 			},
-			Err(e) => return Err(e.to_string()),
+			Err(e) => {
+				// inner.state = TxState::CommitFail;
+				return Err(e.to_string())
+			}
 		}
 	}
 	// 回滚一个事务
 	pub async fn rollback(&self) -> DBResult {
-		let mut txn = self.0.lock().await;
-		txn.state = TxState::Rollbacking;
-		match txn.rollback_inner().await {
+		let inner = unsafe { &mut *self.inner.get() };
+		inner.state = TxState::Rollbacking;
+		match self.rollback_inner().await {
 			Ok(()) => {
-				txn.state = TxState::Rollbacked;
+				inner.state = TxState::Rollbacked;
 				return Ok(())
 			},
-			Err(e) => return Err(e.to_string())
+			Err(e) => {
+				inner.state = TxState::RollbackFail;
+				return Err(e.to_string())
+			}
 		}
 	}
 
@@ -406,7 +406,7 @@ impl RefMemeryTxn {
 		Ok(())
 	}
 	// 查询
-	pub async fn query(
+	pub fn query(
 		&self,
 		arr: Arc<Vec<TabKV>>,
 		_lock_time: Option<usize>,
@@ -414,7 +414,7 @@ impl RefMemeryTxn {
 	) -> SResult<Vec<TabKV>> {
 		let mut value_arr = Vec::new();
 		for tabkv in arr.iter() {
-			let value = match self.0.lock().await.get(tabkv.key.clone()).await {
+			let value = match self.get(tabkv.key.clone()) {
 				Some(v) => Some(v),
 				_ => None
 			};
@@ -435,7 +435,7 @@ impl RefMemeryTxn {
 	pub async fn modify(&self, arr: Arc<Vec<TabKV>>, _lock_time: Option<usize>, _readonly: bool) -> DBResult {
 		for tabkv in arr.iter() {
 			if tabkv.value == None {
-				match self.0.lock().await.delete(tabkv.key.clone()).await {
+				match self.delete(tabkv.key.clone()) {
 				Ok(_) => (),
 				Err(e) => 
 					{
@@ -443,7 +443,7 @@ impl RefMemeryTxn {
 					},
 				};
 			} else {
-				match self.0.lock().await.upsert(tabkv.key.clone(), tabkv.value.clone().unwrap()).await {
+				match self.upsert(tabkv.key.clone(), tabkv.value.clone().unwrap()) {
 				Ok(_) => (),
 				Err(e) =>
 					{
@@ -462,7 +462,8 @@ impl RefMemeryTxn {
 		descending: bool,
 		filter: Filter
 	) -> IterResult {
-		let b = self.0.lock().await;
+		let inner = unsafe { &mut *self.inner.get() };
+
 		let key = match key {
 			Some(k) => Some(Bon::new(k)),
 			None => None,
@@ -472,7 +473,7 @@ impl RefMemeryTxn {
 			None => None,
 		};
 
-		Ok(Box::new(MemIter::new(tab, b.root.clone(), b.root.iter( key, descending), filter)))
+		Ok(Box::new(MemIter::new(tab, inner.root.clone(), inner.root.iter( key, descending), filter)))
 	}
 	// 迭代
 	pub async fn key_iter(
@@ -481,7 +482,8 @@ impl RefMemeryTxn {
 		descending: bool,
 		filter: Filter
 	) -> KeyIterResult {
-		let b = self.0.lock().await;
+		let inner = unsafe { &mut *self.inner.get() };
+
 		let key = match key {
 			Some(k) => Some(Bon::new(k)),
 			None => None,
@@ -490,8 +492,8 @@ impl RefMemeryTxn {
 			&Some(ref k) => Some(k),
 			None => None,
 		};
-		let tab = b.tab.0.lock().await.tab.clone();
-		Ok(Box::new(MemKeyIter::new(&tab, b.root.clone(), b.root.keys(key, descending), filter)))
+		let tab = self.mem_tab_handle.0.lock().await.tab.clone();
+		Ok(Box::new(MemKeyIter::new(&tab, inner.root.clone(), inner.root.keys(key, descending), filter)))
 	}
 	// 索引迭代
 	pub fn index(
@@ -506,8 +508,9 @@ impl RefMemeryTxn {
 	}
 	// 表的大小
 	pub async fn tab_size(&self) -> SResult<usize> {
-		let txn = self.0.lock().await;
-		Ok(txn.root.size())
+		let inner = unsafe { &mut *self.inner.get() };
+
+		Ok(inner.root.size())
 	}
 }
 

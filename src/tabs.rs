@@ -16,13 +16,13 @@ use r#async::lock::rw_lock::RwLock;
 
 use crate::{db::{SResult, Bin, RwLog, TabMeta, BuildDbType, DBResult}, log_file_db::MemIter};
 use crate::memery_db::MemDB;
-use crate::memery_db::{ MTab, RefMemeryTxn };
-use crate::log_file_db::{LogFileTab, RefLogFileTxn};
+use crate::memery_db::{ MTab, MemTabTxn };
+use crate::log_file_db::{LogFileTab, LogFileTxn};
 use crate::log_file_db::LogFileDB;
 
 pub enum TxnType {
-	MemTxn(RefMemeryTxn),
-	LogFileTxn(RefLogFileTxn)
+	MemTxn(MemTabTxn),
+	LogFileTxn(LogFileTxn)
 }
 // 表结构及修改日志
 pub struct TabLog {

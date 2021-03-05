@@ -16,10 +16,10 @@ use r#async::lock::mutex_lock::Mutex;
 use r#async::rt::{AsyncRuntime, AsyncMap, multi_thread::MultiTaskRuntime};
 use bon::{ReadBuffer, Decode, Encode, WriteBuffer, ReadBonErr};
 
-use crate::db::{SResult, IterResult, KeyIterResult, Filter, TabKV, TxCallback, TxState, Event, Bin, RwLog, TabMeta, CommitResult, DBResult};
-use crate::memery_db::{MemDBSnapshot, MemDB, RefMemeryTxn, MemeryMetaTxn};
+use crate::{db::{SResult, IterResult, KeyIterResult, Filter, TabKV, TxCallback, TxState, Event, Bin, RwLog, TabMeta, CommitResult, DBResult}, memery_db::MemTabTxn};
+use crate::memery_db::{MemDBSnapshot, MemDB, MemeryMetaTxn};
 use crate::tabs::TxnType;
-use crate::log_file_db::{LogFileDBSnapshot, RefLogFileTxn, LogFileMetaTxn, LogFileDB, DB_META_TAB_NAME};
+use crate::log_file_db::{LogFileDBSnapshot, LogFileTxn, LogFileMetaTxn, LogFileDB, DB_META_TAB_NAME};
 use crate::fork::{ALL_TABLES, TableMetaInfo};
 
 /**
@@ -503,9 +503,9 @@ impl DatabaseWare {
 */
 pub enum DatabaseTabTxn {
 	// 内存表事务
-	MemTabTxn(RefMemeryTxn),
+	MemTabTxn(MemTabTxn),
 	// 日志文件表事务
-	LogFileTabTxn(RefLogFileTxn)
+	LogFileTabTxn(LogFileTxn)
 }
 
 impl DatabaseTabTxn {
@@ -514,7 +514,7 @@ impl DatabaseTabTxn {
 	* @param txn 内存表事务
 	* @returns 内存表事务
 	*/
-	fn new_mem_tab_txn(txn: RefMemeryTxn) -> DatabaseTabTxn {
+	fn new_mem_tab_txn(txn: MemTabTxn) -> DatabaseTabTxn {
 		DatabaseTabTxn::MemTabTxn(txn)
 	}
 
@@ -523,7 +523,7 @@ impl DatabaseTabTxn {
 	* @param txn 日志文件表事务
 	* @returns 文件表事务
 	*/
-	fn new_log_file_tab_txn(txn: RefLogFileTxn) -> DatabaseTabTxn {
+	fn new_log_file_tab_txn(txn: LogFileTxn) -> DatabaseTabTxn {
 		DatabaseTabTxn::LogFileTabTxn(txn)
 	}
 
@@ -531,13 +531,13 @@ impl DatabaseTabTxn {
 	* 获取事务状态
 	* @returns 事务状态
 	*/
-	async fn get_state(&self) -> TxState {
+	fn get_state(&self) -> TxState {
 		match self {
 			DatabaseTabTxn::MemTabTxn(txn) => {
-				txn.get_state().await
+				txn.get_state()
 			}
 			DatabaseTabTxn::LogFileTabTxn(txn) => {
-				txn.get_state().await
+				txn.get_state()
 			}
 		}
 	}
@@ -614,10 +614,10 @@ impl DatabaseTabTxn {
 	) -> SResult<Vec<TabKV>> {
 		match self {
 			DatabaseTabTxn::MemTabTxn(txn) => {
-				txn.query(arr, _lock_time, _readonly).await
+				txn.query(arr, _lock_time, _readonly)
 			}
 			DatabaseTabTxn::LogFileTabTxn(txn) => {
-				txn.query(arr, _lock_time, _readonly).await
+				txn.query(arr, _lock_time, _readonly)
 			}
 		}
 	}
@@ -635,7 +635,7 @@ impl DatabaseTabTxn {
 				txn.modify(arr, _lock_time, _readonly).await
 			}
 			DatabaseTabTxn::LogFileTabTxn(txn) => {
-				txn.modify(arr, _lock_time, _readonly).await
+				txn.modify(arr, _lock_time, _readonly)
 			}
 		}
 	}
@@ -660,7 +660,7 @@ impl DatabaseTabTxn {
 				txn.iter(tab, key, descending, filter).await
 			}
 			DatabaseTabTxn::LogFileTabTxn(txn) => {
-				txn.iter(tab, key, descending, filter).await
+				txn.iter(tab, key, descending, filter)
 			}
 		}
 	}
@@ -720,7 +720,7 @@ impl DatabaseTabTxn {
 				txn.tab_size().await
 			}
 			DatabaseTabTxn::LogFileTabTxn(txn) => {
-				txn.tab_size().await
+				txn.tab_size()
 			}
 		}
 	}

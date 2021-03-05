@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}};
+use std::{cell::UnsafeCell, sync::{Arc, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}}};
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::fs;
@@ -333,45 +333,53 @@ impl LogFileDBSnapshot {
 }
 
 // 内存事务
-pub struct FileMemTxn {
+pub struct LogFileTxn {
+	log_file_tab_hanlde: LogFileTab,
+	inner: Arc<UnsafeCell<LogFileTxnInner>>,
+}
+
+unsafe impl Send for LogFileTxn {}
+unsafe impl Sync for LogFileTxn {}
+
+struct LogFileTxnInner {
 	id: Guid,
 	writable: bool,
-	tab: LogFileTab,
 	root: BinMap,
 	old: BinMap,
 	rwlog: XHashMap<Bin, RwLog>,
 	state: TxState,
 }
 
-pub struct RefLogFileTxn(Mutex<FileMemTxn>);
+unsafe impl Send for LogFileTxnInner {}
+unsafe impl Sync for LogFileTxnInner {}
 
-unsafe impl Sync for RefLogFileTxn  {}
-
-impl FileMemTxn {
+impl LogFileTxn {
 	//开始事务
-	pub async fn new(tab: LogFileTab, id: &Guid, writable: bool) -> RefLogFileTxn {
+	pub async fn new(tab: LogFileTab, id: &Guid, writable: bool) -> LogFileTxn {
 		let root = tab.0.lock().await.root.clone();
-		let txn = FileMemTxn {
-			id: id.clone(),
-			writable,
-			root: root.clone(),
-			tab,
-			old: root,
-			rwlog: XHashMap::default(),
-			state: TxState::Ok,
-		};
-		return RefLogFileTxn(Mutex::new(txn))
+		LogFileTxn {
+			log_file_tab_hanlde: tab,
+			inner: Arc::new(UnsafeCell::new(LogFileTxnInner {
+				id: id.clone(),
+				writable,
+				root: root.clone(),
+				old: root,
+				rwlog: XHashMap::default(),
+				state: TxState::Ok,
+			}))
+		}
 	}
 	//获取数据
-	pub async fn get(&mut self, key: Bin) -> Option<Bin> {
-		match self.root.get(&Bon::new(key.clone())) {
+	pub fn get(&self, key: Bin) -> Option<Bin> {
+		let inner = unsafe { &mut *self.inner.get() };
+
+		match inner.root.get(&Bon::new(key.clone())) {
 			Some(v) => {
-				if self.writable {
-					match self.rwlog.get(&key) {
+				if inner.writable {
+					match inner.rwlog.get(&key) {
 						Some(_) => (),
 						None => {
-							&mut self.rwlog.insert(key, RwLog::Read);
-							()
+							inner.rwlog.insert(key, RwLog::Read);
 						}
 					}
 				}
@@ -382,87 +390,96 @@ impl FileMemTxn {
 		}
 	}
 	//插入/修改数据
-	pub async fn upsert(&mut self, key: Bin, value: Bin) -> DBResult {
-		self.root.upsert(Bon::new(key.clone()), value.clone(), false);
-		self.rwlog.insert(key.clone(), RwLog::Write(Some(value.clone())));
+	pub fn upsert(&self, key: Bin, value: Bin) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
+
+		inner.root.upsert(Bon::new(key.clone()), value.clone(), false);
+		inner.rwlog.insert(key.clone(), RwLog::Write(Some(value.clone())));
 
 		Ok(())
 	}
 	//删除
-	pub async fn delete(&mut self, key: Bin) -> DBResult {
-		self.root.delete(&Bon::new(key.clone()), false);
-		self.rwlog.insert(key, RwLog::Write(None));
+	pub fn delete(&self, key: Bin) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
+
+		inner.root.delete(&Bon::new(key.clone()), false);
+		inner.rwlog.insert(key, RwLog::Write(None));
 
 		Ok(())
 	}
 
 	//预提交
-	pub async fn prepare_inner(&mut self) -> DBResult {
-		let mut tab = self.tab.0.lock().await;
+	pub async fn prepare_inner(&self) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
+
+		let mut tab = self.log_file_tab_hanlde.0.lock().await;
 		//遍历事务中的读写日志
-		for (key, rw_v) in self.rwlog.iter() {
+		for (key, rw_v) in inner.rwlog.iter() {
 			//检查预提交是否冲突
 			match tab.prepare.try_prepare(key, rw_v) {
 				Ok(_) => (),
 				Err(s) => return Err(s),
 			};
 			//检查Tab根节点是否改变
-			if tab.root.ptr_eq(&self.old) == false {
+			if tab.root.ptr_eq(&inner.old) == false {
 				let key = Bon::new(key.clone());
 				match tab.root.get(&key) {
-					Some(r1) => match self.old.get(&key) {
+					Some(r1) => match inner.old.get(&key) {
 						Some(r2) if (r1 as *const Bin) == (r2 as *const Bin) => (),
 						_ => return Err(String::from("prepare conflicted value diff"))
 					},
-					_ => match self.old.get(&key) {
+					_ => match inner.old.get(&key) {
 						None => (),
 						_ => return Err(String::from("prepare conflicted old not None"))
 					}
 				}
 			}
 		}
-		let rwlog = mem::replace(&mut self.rwlog, XHashMap::with_capacity_and_hasher(0, Default::default()));
+		let rwlog = mem::replace(&mut inner.rwlog, XHashMap::with_capacity_and_hasher(0, Default::default()));
 		//写入预提交
-		tab.prepare.insert(self.id.clone(), rwlog);
+		tab.prepare.insert(inner.id.clone(), rwlog);
 
 		return Ok(())
 	}
 
 	// 内部提交方法
-	pub async fn commit_inner(&mut self) -> CommitResult {
-		let mut lock = self.tab.0.lock().await;
-		let logs = lock.prepare.remove(&self.id);
-		let logs = match logs {
-			Some(rwlog) => {
-				let root_if_eq = lock.root.ptr_eq(&self.old);
-				//判断根节点是否相等
-				if !root_if_eq {
-					for (k, rw_v) in rwlog.iter() {
-						match rw_v {
-							RwLog::Read => (),
-							_ => {
-								let k = Bon::new(k.clone());
-								match rw_v {
-									RwLog::Write(None) => {
-										lock.root.delete(&k, false);
-									},
-									RwLog::Write(Some(v)) => {
-										lock.root.upsert(k.clone(), v.clone(), false);
-									},
-									_ => (),
-								}
-							},
+	pub async fn commit_inner(&self) -> CommitResult {
+		let mut lock = self.log_file_tab_hanlde.0.lock().await;
+
+		let logs = {
+			let inner = unsafe { &mut *self.inner.get() };
+			match lock.prepare.remove(&inner.id) {
+				Some(rwlog) => {
+					let root_if_eq = inner.root.ptr_eq(&inner.old);
+					//判断根节点是否相等
+					if !root_if_eq {
+						for (k, rw_v) in rwlog.iter() {
+							match rw_v {
+								RwLog::Read => (),
+								_ => {
+									let k = Bon::new(k.clone());
+									match rw_v {
+										RwLog::Write(None) => {
+											inner.root.delete(&k, false);
+										},
+										RwLog::Write(Some(v)) => {
+											inner.root.upsert(k.clone(), v.clone(), false);
+										},
+										_ => (),
+									}
+								},
+							}
 						}
+					} else {
+						lock.root = inner.root.clone();
 					}
-				} else {
-					lock.root = self.root.clone();
+					rwlog
 				}
-				rwlog
+				None => return Err(String::from("error prepare null"))
 			}
-			None => return Err(String::from("error prepare null"))
 		};
 
-		let async_tab = self.tab.1.clone();
+		let async_tab = self.log_file_tab_hanlde.1.clone();
 
 		let mut insert_pairs: Vec<(&[u8], &[u8])> = vec![];
 		let mut delete_keys: Vec<&[u8]> = vec![];
@@ -495,16 +512,17 @@ impl FileMemTxn {
 		Ok(logs)
 	}
 	//回滚
-	pub async fn rollback_inner(&mut self) -> DBResult {
-		let mut tab = self.tab.0.lock().await;
-		tab.prepare.remove(&self.id);
+	pub async fn rollback_inner(&self) -> DBResult {
+		let inner = unsafe { &mut *self.inner.get() };
+		let mut tab = self.log_file_tab_hanlde.0.lock().await;
+		tab.prepare.remove(&inner.id);
 
 		Ok(())
 	}
 
 	/// 强制产生分裂
 	async fn force_fork_inner(&self) -> Result<usize> {
-		self.tab.1.clone().force_fork().await
+		self.log_file_tab_hanlde.1.clone().force_fork().await
 	}
 
 	pub async fn fork_prepare_inner(&self, ware: Atom, tab_name: Atom, fork_tab_name: Atom, meta: TabMeta) -> DBResult {
@@ -585,52 +603,53 @@ impl FileMemTxn {
 	}
 }
 
-impl RefLogFileTxn {
+impl LogFileTxn {
 	// 获得事务的状态
-	pub async fn get_state(&self) -> TxState {
-		self.0.lock().await.state.clone()
+	pub fn get_state(&self) -> TxState {
+		let inner = unsafe { &*self.inner.get() };
+		inner.state.clone()
 	}
 	// 预提交一个事务
 	pub async fn prepare(&self, _timeout: usize) -> DBResult {
-		let mut txn = self.0.lock().await;
-		txn.state = TxState::Preparing;
-		match txn.prepare_inner().await {
+		let inner = unsafe { &mut *self.inner.get() };
+		inner.state = TxState::Preparing;
+		match self.prepare_inner().await {
 			Ok(()) => {
-				txn.state = TxState::PreparOk;
+				inner.state = TxState::PreparOk;
 				return Ok(())
 			},
 			Err(e) => {
-				txn.state = TxState::PreparFail;
+				inner.state = TxState::PreparFail;
 				return Err(e.to_string())
 			},
 		}
 	}
 	// 提交一个事务
 	pub async fn commit(&self) -> CommitResult {
-		let mut txn = self.0.lock().await;
-		txn.state = TxState::Committing;
-		match txn.commit_inner().await {
+		// let inner = unsafe { &mut *self.inner.get() };
+		// inner.state = TxState::Committing;
+		match self.commit_inner().await {
 			Ok(log) => {
-				txn.state = TxState::Commited;
+				// inner.state = TxState::Commited;
 				return Ok(log)
 			},
 			Err(e) => {
-				txn.state = TxState::CommitFail;
+				// inner.state = TxState::CommitFail;
 				return Err(e.to_string())
 			}
 		}
 	}
 	// 回滚一个事务
 	pub async fn rollback(&self) -> DBResult {
-		let mut txn = self.0.lock().await;
-		txn.state = TxState::Rollbacking;
-		match txn.rollback_inner().await {
+		let inner = unsafe { &mut *self.inner.get() };
+		inner.state = TxState::Rollbacking;
+		match self.rollback_inner().await {
 			Ok(()) => {
-				txn.state = TxState::Rollbacked;
+				inner.state = TxState::Rollbacked;
 				return Ok(())
 			},
 			Err(e) => {
-				txn.state = TxState::RollbackFail;
+				inner.state = TxState::RollbackFail;
 				return Err(e.to_string())
 			}
 		}
@@ -638,25 +657,22 @@ impl RefLogFileTxn {
 
 	/// fork 预提交
 	pub async fn fork_prepare(&self, ware: Atom, tab_name: Atom, fork_tab_name: Atom, meta: TabMeta) -> DBResult {
-		let mut txn = self.0.lock().await;
-		txn.fork_prepare_inner(ware, tab_name, fork_tab_name, meta).await
+		self.fork_prepare_inner(ware, tab_name, fork_tab_name, meta).await
 	}
 
 	/// fork 提交
 	pub async fn fork_commit(&self, ware: Atom, tab_name: Atom, fork_tab_name: Atom, meta: TabMeta) -> DBResult {
-		let mut txn = self.0.lock().await;
-		txn.fork_commit_inner(ware, tab_name, fork_tab_name, meta).await
+		self.fork_commit_inner(ware, tab_name, fork_tab_name, meta).await
 	}
 
 	/// fork 回滚
 	pub async fn fork_rollback(&self) -> DBResult {
-		let mut txn = self.0.lock().await;
-		txn.fork_rollback_inner().await
+		self.fork_rollback_inner().await
 	}
 
 	/// 强制产生分裂
 	pub async fn force_fork(&self) -> Result<usize> {
-		self.0.lock().await.force_fork_inner().await
+		self.force_fork_inner().await
 	}
 
 	// 键锁，key可以不存在，根据lock_time的值决定是锁还是解锁
@@ -664,7 +680,7 @@ impl RefLogFileTxn {
 		Ok(())
 	}
 	// 查询
-	pub async fn query(
+	pub fn query(
 		&self,
 		arr: Arc<Vec<TabKV>>,
 		_lock_time: Option<usize>,
@@ -672,7 +688,7 @@ impl RefLogFileTxn {
 	) -> SResult<Vec<TabKV>> {
 		let mut value_arr = Vec::new();
 		for tabkv in arr.iter() {
-			let value = match self.0.lock().await.get(tabkv.key.clone()).await {
+			let value = match self.get(tabkv.key.clone()) {
 				Some(v) => Some(v),
 				_ => None
 			};
@@ -690,15 +706,15 @@ impl RefLogFileTxn {
 		Ok(value_arr)
 	}
 	// 修改，插入、删除及更新
-	pub async fn modify(&self, arr: Arc<Vec<TabKV>>, _lock_time: Option<usize>, _readonly: bool) -> DBResult {
+	pub fn modify(&self, arr: Arc<Vec<TabKV>>, _lock_time: Option<usize>, _readonly: bool) -> DBResult {
 		for tabkv in arr.iter() {
 			if tabkv.value == None {
-				match self.0.lock().await.delete(tabkv.key.clone()).await {
+				match self.delete(tabkv.key.clone()) {
 					Ok(_) => (),
 					Err(e) => return Err(e.to_string())
 				};
 			} else {
-				match self.0.lock().await.upsert(tabkv.key.clone(), tabkv.value.clone().unwrap()).await {
+				match self.upsert(tabkv.key.clone(), tabkv.value.clone().unwrap()) {
 					Ok(_) => (),
 					Err(e) => return Err(e.to_string())
 				};
@@ -707,14 +723,15 @@ impl RefLogFileTxn {
 		Ok(())
 	}
 	// 迭代
-	pub async fn iter(
+	pub fn iter(
 		&self,
 		tab: &Atom,
 		key: Option<Bin>,
 		descending: bool,
 		filter: Filter
 	) -> IterResult {
-		let b = self.0.lock().await;
+		let inner = unsafe { &mut *self.inner.get() };
+
 		let key = match key {
 			Some(k) => Some(Bon::new(k)),
 			None => None,
@@ -724,7 +741,7 @@ impl RefLogFileTxn {
 			None => None,
 		};
 
-		Ok(Box::new(MemIter::new(tab, b.root.clone(), b.root.iter( key, descending), filter)))
+		Ok(Box::new(MemIter::new(tab, inner.root.clone(), inner.root.iter( key, descending), filter)))
 	}
 	// 迭代
 	pub async fn key_iter(
@@ -733,7 +750,8 @@ impl RefLogFileTxn {
 		descending: bool,
 		filter: Filter
 	) -> KeyIterResult {
-		let b = self.0.lock().await;
+		let inner = unsafe { &mut *self.inner.get() };
+
 		let key = match key {
 			Some(k) => Some(Bon::new(k)),
 			None => None,
@@ -742,8 +760,8 @@ impl RefLogFileTxn {
 			&Some(ref k) => Some(k),
 			None => None,
 		};
-		let tab = b.tab.0.lock().await.tab.clone();
-		Ok(Box::new(MemKeyIter::new(&tab, b.root.clone(), b.root.keys(key, descending), filter)))
+		let tab = self.log_file_tab_hanlde.0.lock().await.tab.clone();
+		Ok(Box::new(MemKeyIter::new(&tab, inner.root.clone(), inner.root.keys(key, descending), filter)))
 	}
 	// 索引迭代
 	pub fn index(
@@ -757,9 +775,10 @@ impl RefLogFileTxn {
 		Err("not implemeted".to_string())
 	}
 	// 表的大小
-	pub async fn tab_size(&self) -> SResult<usize> {
-		let txn = self.0.lock().await;
-		Ok(txn.root.size())
+	pub fn tab_size(&self) -> SResult<usize> {
+		let inner = unsafe { &mut *self.inner.get() };
+		
+		Ok(inner.root.size())
 	}
 }
 
@@ -1279,7 +1298,7 @@ impl LogFileTab {
 		return LogFileTab(Arc::new(Mutex::new(file_mem_tab)), store);
 	}
 
-	pub async fn transaction(&self, id: &Guid, writable: bool) -> RefLogFileTxn {
-		FileMemTxn::new(self.clone(), id, writable).await
+	pub async fn transaction(&self, id: &Guid, writable: bool) -> LogFileTxn {
+		LogFileTxn::new(self.clone(), id, writable).await
 	}
 }
