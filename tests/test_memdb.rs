@@ -19,10 +19,10 @@ fn test_mem_db_iter() {
 
 	let _ = rt1.spawn(rt.alloc(), async move {
 		*STORE_RUNTIME.write().await = Some(rt.clone());
-		let _ = mgr.register(Atom::from("memory"), Arc::new(ware)).await;
+		let _ = mgr.register(Atom::from("memory"), ware).await;
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-		tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(Arc::new(meta))).await;
+		tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
 
 		tr.prepare().await;
 		tr.commit().await;
@@ -78,14 +78,14 @@ fn test_memory_db() {
 		*STORE_RUNTIME.write().await = Some(rt.clone());
 		let mgr = Mgr::new(GuidGen::new(0, 0));
 		let ware = DatabaseWare::new_mem_ware(MemDB::new());
-		let _ = mgr.register(Atom::from("memory"), Arc::new(ware)).await;
+		let _ = mgr.register(Atom::from("memory"), ware).await;
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(Arc::new(meta))).await;
-		tr.alter(&Atom::from("memory"), &Atom::from("world"), Some(Arc::new(meta1))).await;
+		tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
+		tr.alter(&Atom::from("memory"), &Atom::from("world"), Some(meta1)).await;
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
 		tr.commit().await;

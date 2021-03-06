@@ -1,7 +1,7 @@
 /**
  * 表管理器，给每个具体的Ware用
  */
-use std::sync::{Arc};
+use std::{array::IntoIter, sync::{Arc}};
 use std::mem;
 use std::ops::{DerefMut, Deref};
 
@@ -29,18 +29,18 @@ pub struct TabLog {
 	map: OrdMap<Tree<Atom, TabInfo>>,
 	old_map: OrdMap<Tree<Atom, TabInfo>>, // 用于判断mgr中tabs是否修改过
 	meta_names: XHashSet<Atom>, //元信息表的名字
-	alter_logs: XHashMap<(Atom, usize), Option<Arc<TabMeta>>>, // 记录每个被改过元信息的表
+	alter_logs: XHashMap<(Atom, usize), Option<TabMeta>>, // 记录每个被改过元信息的表
 	rename_logs: XHashMap<Atom, (Atom, usize)>, // 新名字->(源名字, 版本号)
 }
 impl TabLog {
 	// 列出全部的表
 	pub fn list(&self) -> TabIter {
-		TabIter::new(Arc::new(RwLock::new(self.map.clone())), self.map.keys(None, false))
+		TabIter::new(self.map.clone(), self.map.keys(None, false))
 	}
 	// 获取指定的表结构
-	pub fn get(&self, tab: &Atom) -> Option<Arc<TabMeta>> {
+	pub fn get(&self, tab: &Atom) -> Option<TabMeta> {
 		match self.map.get(tab) {
-			Some(t) => Some(t.meta.clone()),
+			Some(t) => Some(t.inner.meta.clone()),
 			_ => None
 		}
 	}
@@ -55,14 +55,14 @@ impl TabLog {
 		}
 	}
 	// 表的元信息
-	pub fn tab_info(&self, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub fn tab_info(&self, tab_name: &Atom) -> Option<TabMeta> {
 		match self.map.get(tab_name) {
-			Some(info) => Some(info.meta.clone()),
+			Some(info) => Some(info.inner.meta.clone()),
 			_ => None,
 		}
 	}
 	// 新增 修改 删除 表
-	pub fn alter(&mut self, tab_name: &Atom, meta: Option<Arc<TabMeta>>) {
+	pub fn alter(&mut self, tab_name: &Atom, meta: Option<TabMeta>) {
 		// 先查找rename_logs，获取该表的源名字及版本，然后修改alter_logs
 		let (src_name, ver) = match self.rename_logs.get(tab_name) {
 			Some(v) => v.clone(),
@@ -71,20 +71,17 @@ impl TabLog {
 		let mut f = |v: Option<&TabInfo>| {
 			match v {
 				Some(ti) => match &meta {
-					Some(si) => ActionResult::Upsert(TabInfo {
-						meta: si.clone(),
-						init: ti.init.clone(),
-					}),
+					Some(si) => ActionResult::Upsert(ti.clone()),
 					_ => ActionResult::Delete
 				},
-				_ => match &meta {
+				None => match &meta {
 					Some(si) => ActionResult::Upsert(TabInfo::new(si.clone())),
 					_ => ActionResult::Ignore
 				}
 			}
 		};
 		self.map.action(&src_name, &mut f);
-		self.alter_logs.entry((src_name, ver)).or_insert(meta.clone());
+		self.alter_logs.entry((src_name, ver)).or_insert(meta);
 		self.meta_names.insert(tab_name.clone());
 	}
 	// 创建表事务
@@ -92,7 +89,7 @@ impl TabLog {
 		match self.map.get(tab_name) {
 			Some(ref info) => {
 				let tab = {
-					let mut var = info.init.lock().await;
+					let mut var = info.inner.init.lock().await;
 					match var.wait {
 						Some(ref mut vec) => {// 表尚未build
 							if *vec {// 第一次调用
@@ -207,7 +204,7 @@ impl DerefMut for Prepare {
 }
 
 pub struct TabIter{
-	_root: Arc<RwLock<OrdMap<Tree<Atom, TabInfo>>>>,
+	root: OrdMap<Tree<Atom, TabInfo>>,
 	point: usize,
 }
 
@@ -218,9 +215,9 @@ impl Drop for TabIter {
 }
 
 impl<'a> TabIter {
-	pub fn new(root: Arc<RwLock<OrdMap<Tree<Atom, TabInfo>>>>, it: Keys<'a, Tree<Atom, TabInfo>>) -> TabIter{
+	pub fn new(root: OrdMap<Tree<Atom, TabInfo>>, it: Keys<'a, Tree<Atom, TabInfo>>) -> TabIter{
 		TabIter{
-			_root: root.clone(),
+			root: root.clone(),
 			point: Box::into_raw(Box::new(it)) as usize
 		}
 	}
@@ -241,9 +238,10 @@ impl Iterator for TabIter {
 
 
 // 表管理器
+#[derive(Clone)]
 pub struct Tabs {
 	//全部的表结构
-	map: Arc<RwLock<OrdMap<Tree<Atom, TabInfo>>>>,
+	map: OrdMap<Tree<Atom, TabInfo>>,
 	// 预提交的元信息事务表
 	prepare: Arc<Mutex<XHashMap<Guid, TabLog>>>,
 }
@@ -251,7 +249,7 @@ pub struct Tabs {
 impl Tabs {
 	pub fn new() -> Self {
 		Tabs {
-			map : Arc::new(RwLock::new(OrdMap::new(new()))),
+			map : OrdMap::new(new()),
 			prepare: Arc::new(Mutex::new(XHashMap::with_capacity_and_hasher(0, Default::default()))),
 		}
 	}
@@ -264,19 +262,19 @@ impl Tabs {
 	}
 
 	// 列出全部的表
-	pub async fn list(&self) -> TabIter {
-		TabIter::new(self.map.clone(), self.map.read().await.keys(None, false))
+	pub fn list(&self) -> TabIter {
+		TabIter::new(self.map.clone(), self.map.keys(None, false))
 	}
 	// 获取指定的表结构
-	pub async fn get(&self, tab: &Atom) -> Option<Arc<TabMeta>> {
-		match self.map.read().await.get(tab) {
-			Some(t) => Some(t.meta.clone()),
+	pub async fn get(&self, tab: &Atom) -> Option<TabMeta> {
+		match self.map.get(tab) {
+			Some(t) => Some(t.inner.meta.clone()),
 			_ => None
 		}
 	}
 	// 获取当前表结构快照
 	pub async fn snapshot(&self) -> TabLog {
-		let map = self.map.read().await.clone();
+		let map = self.map.clone();
 		TabLog {
 			map: map.clone(),
 			old_map: map,
@@ -286,16 +284,15 @@ impl Tabs {
 		}
 	}
 	// 获取表的元信息
-	pub async fn get_tab_meta(&self, tab: &Atom) -> Option<Arc<TabMeta>> {
-		match self.map.read().await.get(tab) {
-			Some(info) => Some(info.meta.clone()),
+	pub async fn get_tab_meta(&self, tab: &Atom) -> Option<TabMeta> {
+		match self.map.get(tab) {
+			Some(info) => Some(info.inner.meta.clone()),
 			_ => None,
 		}
 	}
 	// 设置表的元信息
-	pub async fn set_tab_meta(&mut self, tab: Atom, meta: Arc<TabMeta>) -> bool {
-		let r = self.map.write().await.insert(tab, TabInfo::new(meta));
-		r
+	pub async fn set_tab_meta(&mut self, tab: Atom, meta: TabMeta) -> bool {
+		self.map.insert(tab, TabInfo::new(meta))
 	}
 
 	// 预提交
@@ -307,11 +304,11 @@ impl Tabs {
 			}
 		}
 		// 然后检查数据表是否被修改
-		if !self.map.read().await.ptr_eq(&log.old_map) {
+		if !self.map.ptr_eq(&log.old_map) {
 			// 如果被修改，则检查是否有冲突
 			// TODO 暂时没有考虑重命名的情况
 			for name in log.meta_names.iter() {
-				match self.map.read().await.get(name) {
+				match self.map.get(name) {
 					Some(r1) => match log.old_map.get(name) {
 						Some(r2) if (r1 as *const TabInfo) == (r2 as *const TabInfo) => (),
 						_ => return Err(String::from("meta prepare conflicted"))
@@ -327,19 +324,19 @@ impl Tabs {
 		Ok(())
 	}
 	// 元信息的提交
-	pub async fn commit(&self, id: &Guid) {
+	pub async fn commit(&mut self, id: &Guid) {
 		match self.prepare.lock().await.remove(id) {
-			Some(log) => if self.map.read().await.ptr_eq(&log.old_map) {
+			Some(log) => if self.map.ptr_eq(&log.old_map) {
 				// 检查数据表是否被修改， 如果没有修改，则可以直接替换根节点
-				*self.map.write().await = log.map;
+				self.map = log.map;
 			}else{
 				// 否则，重新执行一遍修改
 				for r in log.alter_logs {
 					if r.1.is_none() {
-						self.map.write().await.delete(&Atom::from((r.0).0.as_ref()), false);
+						self.map.delete(&Atom::from((r.0).0.as_ref()), false);
 					} else {
 						let tab_info = TabInfo::new(r.1.unwrap());
-						self.map.write().await.upsert(Atom::from((r.0).0.as_ref()), tab_info, false);
+						self.map.upsert(Atom::from((r.0).0.as_ref()), tab_info, false);
 					}
 				}
 			}
@@ -356,17 +353,24 @@ impl Tabs {
 // 表信息
 #[derive(Clone)]
 pub struct TabInfo {
-	meta:  Arc<TabMeta>,
-	init: Arc<Mutex<TabInit>>,
+	inner: Arc<TabInfoInner>,
 }
+
+struct TabInfoInner {
+	meta: TabMeta,
+	init: Mutex<TabInit>
+}
+
 impl TabInfo {
-	fn new(meta: Arc<TabMeta>) -> Self {
-		TabInfo{
-			meta,
-			init: Arc::new(Mutex::new(TabInit {
-				tab_type: TabType::Unkonwn,
-				wait:Some(true),
-			})),
+	fn new(meta: TabMeta) -> Self {
+		TabInfo {
+			inner: Arc::new(TabInfoInner {
+				meta,
+				init: Mutex::new(TabInit {
+					tab_type: TabType::Unkonwn,
+					wait:Some(true),
+				}), 
+			})
 		}
 	}
 }

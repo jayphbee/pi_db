@@ -25,15 +25,15 @@ fn test_fork() {
 
 		let mgr = Mgr::new(GuidGen::new(0, 0));
 		let ware = DatabaseWare::new_log_file_ware(LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await);
-		let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+		let _ = mgr.register(Atom::from("logfile"), ware).await;
 
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Bin);
 		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
 		// 创建一个用于存储元信息的表
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/tabs_meta"), Some(Arc::new(meta))).await;
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(Arc::new(meta1))).await;
+		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/tabs_meta"), Some(meta)).await;
+		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(meta1)).await;
 		let p = tr.prepare().await;
 		tr.commit().await;
 
@@ -153,13 +153,13 @@ fn test_load_data() {
 		*STORE_RUNTIME.write().await = Some(rt.clone());
 		let mgr = Mgr::new(GuidGen::new(0, 0));
 		let ware = DatabaseWare::new_log_file_ware(LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await);
-		let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+		let _ = mgr.register(Atom::from("logfile"), ware).await;
 
 		let mut tr1 = mgr.transaction(true, Some(rt.clone())).await;
 		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-		tr1.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(Arc::new(meta1.clone()))).await;
-		tr1.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello_fork"), Some(Arc::new(meta1.clone()))).await;
-		tr1.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello_fork2"), Some(Arc::new(meta1))).await;
+		tr1.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(meta1.clone())).await;
+		tr1.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello_fork"), Some(meta1.clone())).await;
+		tr1.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello_fork2"), Some(meta1)).await;
 		tr1.prepare().await;
 		tr1.commit().await;
 

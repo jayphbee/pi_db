@@ -109,7 +109,7 @@ impl MTab {
 * 内存库
 */
 #[derive(Clone)]
-pub struct MemDB(Arc<Tabs>);
+pub struct MemDB(Tabs);
 
 impl MemDB {
 	/**
@@ -119,7 +119,7 @@ impl MemDB {
 	pub fn new() -> Self {
 		MEMORY_WARE_CREATE_COUNT.sum(1);
 
-		MemDB(Arc::new(Tabs::new()))
+		MemDB(Tabs::new())
 	}
 
 	pub async fn open(tab: &Atom) -> SResult<MTab> {
@@ -127,13 +127,13 @@ impl MemDB {
 	}
 
 	// 拷贝全部的表
-	pub async fn tabs_clone(&self) -> Arc<Self> {
-		Arc::new(MemDB(Arc::new(self.0.clone_map())))
+	pub async fn tabs_clone(&self) -> Self {
+		MemDB(self.0.clone_map())
 	}
 
 	// 列出全部的表
 	pub async fn list(&self) -> Box<dyn Iterator<Item=Atom>> {
-		Box::new(self.0.list().await)
+		Box::new(self.0.list())
 	}
 
 	// 获取该库对预提交后的处理超时时间, 事务会用最大超时时间来预提交
@@ -142,13 +142,13 @@ impl MemDB {
 	}
 
 	// 表的元信息
-	pub async fn tab_info(&self, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub async fn tab_info(&self, tab_name: &Atom) -> Option<TabMeta> {
 		self.0.get(tab_name).await
 	}
 
 	// 获取当前表结构快照
-	pub async fn snapshot(&self) -> Arc<MemDBSnapshot> {
-		Arc::new(MemDBSnapshot(self.clone(), Mutex::new(self.0.snapshot().await)))
+	pub async fn snapshot(&self) -> MemDBSnapshot {
+		MemDBSnapshot(MemDB(self.0.clone_map()), Mutex::new(self.0.snapshot().await))
 	}
 }
 
@@ -161,15 +161,15 @@ impl MemDBSnapshot {
 		Box::new(self.1.lock().await.list())
 	}
 	// 表的元信息
-	pub async fn tab_info(&self, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub async fn tab_info(&self, tab_name: &Atom) -> Option<TabMeta> {
 		self.1.lock().await.get(tab_name)
 	}
 	// 检查该表是否可以创建
-	pub fn check(&self, _tab: &Atom, _meta: &Option<Arc<TabMeta>>) -> DBResult {
+	pub fn check(&self, _tab: &Atom, _meta: &Option<TabMeta>) -> DBResult {
 		Ok(())
 	}
 	// 新增 修改 删除 表
-	pub async fn alter(&self, tab_name: &Atom, meta: Option<Arc<TabMeta>>) {
+	pub async fn alter(&self, tab_name: &Atom, meta: Option<TabMeta>) {
 		self.1.lock().await.alter(tab_name, meta)
 	}
 	// 创建指定表的表事务
@@ -177,15 +177,15 @@ impl MemDBSnapshot {
 		self.1.lock().await.build(BuildDbType::MemoryDB, tab_name, id, writable).await
 	}
 	// 创建一个meta事务
-	pub fn meta_txn(&self, _id: &Guid) -> Arc<MemeryMetaTxn> {
-		Arc::new(MemeryMetaTxn)
+	pub fn meta_txn(&self, _id: &Guid) -> MemeryMetaTxn {
+		MemeryMetaTxn
 	}
 	// 元信息的预提交
 	pub async fn prepare(&self, id: &Guid) -> DBResult{
 		(self.0).0.prepare(id, &mut *self.1.lock().await).await
 	}
 	// 元信息的提交
-	pub async fn commit(&self, id: &Guid){
+	pub async fn commit(&mut self, id: &Guid){
 		(self.0).0.commit(id).await
 	}
 	// 回滚
@@ -675,7 +675,7 @@ pub struct MemeryMetaTxn;
 
 impl MemeryMetaTxn {
 	// 创建表、修改指定表的元数据
-	pub async fn alter(&self, _tab: &Atom, _meta: Option<Arc<TabMeta>>) -> DBResult {
+	pub async fn alter(&self, _tab: &Atom, _meta: Option<TabMeta>) -> DBResult {
 		Ok(())
 	}
 

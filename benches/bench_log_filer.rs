@@ -76,7 +76,7 @@ fn bench_log_file_write(b: &mut Bencher) {
             LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
         );
         let _ = mgr_copy
-            .register(Atom::from("logfile"), Arc::new(ware))
+            .register(Atom::from("logfile"), ware)
             .await;
 
         let mut tr = mgr_copy.transaction(true, Some(rt1.clone())).await;
@@ -86,7 +86,7 @@ fn bench_log_file_write(b: &mut Bencher) {
         tr.alter(
             &Atom::from("logfile"),
             &Atom::from("./testlogfile/hello"),
-            Some(Arc::new(meta)),
+            Some(meta),
         )
         .await;
         tr.prepare().await;
@@ -129,7 +129,7 @@ fn bench_log_file_read(b: &mut Bencher) {
             LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
         );
         let _ = mgr_copy
-            .register(Atom::from("logfile"), Arc::new(ware))
+            .register(Atom::from("logfile"), ware)
             .await;
 
         let mut tr = mgr_copy.transaction(true, Some(rt1.clone())).await;
@@ -139,7 +139,7 @@ fn bench_log_file_read(b: &mut Bencher) {
         tr.alter(
             &Atom::from("logfile"),
             &Atom::from("./testlogfile/hello"),
-            Some(Arc::new(meta)),
+            Some(meta),
         )
         .await;
         tr.prepare().await;
@@ -208,7 +208,7 @@ async fn test_log_file_db_concurrent_read(rt: MultiTaskRuntime<()>, mgr: Mgr) {
     let ware = DatabaseWare::new_log_file_ware(
         LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
     );
-    let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+    let _ = mgr.register(Atom::from("logfile"), ware).await;
     let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
     let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
@@ -216,7 +216,7 @@ async fn test_log_file_db_concurrent_read(rt: MultiTaskRuntime<()>, mgr: Mgr) {
     // tr.alter(
     //     &Atom::from("logfile"),
     //     &Atom::from("./testlogfile/hello"),
-    //     Some(Arc::new(meta)),
+    //     Some(meta),
     // )
     // .await;
     // tr.prepare().await;
@@ -355,7 +355,7 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
     let ware = DatabaseWare::new_log_file_ware(
         LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
     );
-    let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+    let _ = mgr.register(Atom::from("logfile"), ware).await;
     // let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
     // let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
@@ -363,7 +363,7 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
     // tr.alter(
     //     &Atom::from("logfile"),
     //     &Atom::from("./testlogfile/hello"),
-    //     Some(Arc::new(meta)),
+    //     Some(meta),
     // )
     // .await;
     // tr.prepare().await;
@@ -545,7 +545,7 @@ async fn log_file_alter_tab(rt: MultiTaskRuntime<()>) {
     let ware = DatabaseWare::new_log_file_ware(
         LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
     );
-    let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+    let _ = mgr.register(Atom::from("logfile"), ware).await;
     let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
     let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
@@ -554,7 +554,7 @@ async fn log_file_alter_tab(rt: MultiTaskRuntime<()>) {
         .alter(
             &Atom::from("logfile"),
             &Atom::from("./testlogfile/hello"),
-            Some(Arc::new(meta)),
+            Some(meta),
         )
         .await;
     let _ = tr.prepare().await;
@@ -566,7 +566,7 @@ async fn log_file_iter_tab(rt: MultiTaskRuntime<()>) {
     let ware = DatabaseWare::new_log_file_ware(
         LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
     );
-    let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+    let _ = mgr.register(Atom::from("logfile"), ware).await;
     // let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
     // let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
@@ -574,7 +574,7 @@ async fn log_file_iter_tab(rt: MultiTaskRuntime<()>) {
     // let _ = tr.alter(
     //     &Atom::from("logfile"),
     //     &Atom::from("./testlogfile/hello"),
-    //     Some(Arc::new(meta)),
+    //     Some(meta),
     // )
     // .await;
     // let _ = tr.prepare().await;

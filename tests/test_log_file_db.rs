@@ -69,7 +69,7 @@ fn test_collect_log_file_db() {
 			LogFileDB::new(Atom::from("./tests/log"), 1024 * 1024 * 1024).await,
 		);
 		let _ = mgr_copy
-			.register(Atom::from("./tests"), Arc::new(ware))
+			.register(Atom::from("./tests"), ware)
 			.await;
 
 		let mut tr = mgr_copy.transaction(true, Some(rt_copy.clone())).await;
@@ -79,7 +79,7 @@ fn test_collect_log_file_db() {
 		tr.alter(
 			&Atom::from("./tests"),
 			&Atom::from("./tests/log"),
-			Some(Arc::new(meta)),
+			Some(meta),
 		)
 			.await;
 		tr.prepare().await;
@@ -247,14 +247,14 @@ fn test_log_file_db() {
 		*STORE_RUNTIME.write().await = Some(rt.clone());
 		let mgr = Mgr::new(GuidGen::new(0, 0));
 		let ware = DatabaseWare::new_log_file_ware(LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await);
-		let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+		let _ = mgr.register(Atom::from("logfile"), ware).await;
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(Arc::new(meta))).await;
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/world"), Some(Arc::new(meta1))).await;
+		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(meta)).await;
+		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/world"), Some(meta1)).await;
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
 		tr.commit().await;
@@ -349,13 +349,13 @@ fn write_test_data() {
 		*STORE_RUNTIME.write().await = Some(rt.clone());
 		let mgr = Mgr::new(GuidGen::new(0, 0));
 		let ware = DatabaseWare::new_log_file_ware(LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await);
-		let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+		let _ = mgr.register(Atom::from("logfile"), ware).await;
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab"), Some(Arc::new(meta))).await;
+		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab"), Some(meta)).await;
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
 		tr.commit().await;
@@ -417,12 +417,12 @@ fn read_test_data() {
 		*STORE_RUNTIME.write().await = Some(rt.clone());
 		let mgr = Mgr::new(GuidGen::new(0, 0));
 		let ware = DatabaseWare::new_log_file_ware(LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await);
-		let _ = mgr.register(Atom::from("logfile"), Arc::new(ware)).await;
+		let _ = mgr.register(Atom::from("logfile"), ware).await;
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		let a = tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab"), Some(Arc::new(meta))).await;
+		let a = tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab"), Some(meta)).await;
 		println!("alter result ==== {:?}", a);
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
@@ -471,7 +471,7 @@ fn bench_log_file_write() {
             LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
         );
         let _ = mgr_copy
-            .register(Atom::from("logfile"), Arc::new(ware))
+            .register(Atom::from("logfile"), ware)
             .await;
 
         let mut tr = mgr_copy.transaction(true, Some(rt1.clone())).await;
@@ -481,7 +481,7 @@ fn bench_log_file_write() {
         tr.alter(
             &Atom::from("logfile"),
             &Atom::from("./testlogfile/hello"),
-            Some(Arc::new(meta)),
+            Some(meta),
         )
         .await;
         tr.prepare().await;

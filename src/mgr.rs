@@ -88,7 +88,7 @@ impl Mgr {
 	* @param ware 库的实例
 	* @returns 是否注册成功
 	*/
-	pub async fn register(&self, ware_name: Atom, ware: Arc<DatabaseWare>) -> bool {
+	pub async fn register(&self, ware_name: Atom, ware: DatabaseWare) -> bool {
 		self.ware_map.lock().await.register(ware_name, ware)
 	}
 
@@ -107,7 +107,7 @@ impl Mgr {
 	* @param tab_name 表名
 	* @returns 返回表的元信息
 	*/
-	pub async fn tab_info(&self, ware_name:&Atom, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub async fn tab_info(&self, ware_name:&Atom, tab_name: &Atom) -> Option<TabMeta> {
 		match self.find(ware_name).await {
 			Some(b) => b.tab_info(tab_name).await,
 			_ => None
@@ -181,7 +181,7 @@ impl Mgr {
 	* 寻找指定的库
 	* @returns 库信息
 	*/
-	pub async fn find(&self, ware_name: &Atom) -> Option<Arc<DatabaseWare>> {
+	pub async fn find(&self, ware_name: &Atom) -> Option<DatabaseWare> {
 		self.ware_map.lock().await.find(ware_name)
 	}
 }
@@ -192,8 +192,7 @@ pub trait Monitor {
 
 
 // 库表
-#[derive(Clone)]
-struct WareMap(OrdMap<Tree<Atom, Arc<DatabaseWare>>>);
+struct WareMap(OrdMap<Tree<Atom, DatabaseWare>>);
 
 impl fmt::Debug for WareMap {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -206,14 +205,14 @@ impl fmt::Debug for WareMap {
 */
 enum DatabaseWareSnapshot {
 	// 内存数据库快照
-	MemSnapshot(Arc<MemDBSnapshot>),
+	MemSnapshot(MemDBSnapshot),
 	// 日志数据库快照
-	LogFileSnapshot(Arc<LogFileDBSnapshot>)
+	LogFileSnapshot(LogFileDBSnapshot)
 }
 
 impl DatabaseWareSnapshot {
 	pub fn new_mem_ware_snapshot(snapshot: MemDBSnapshot) -> DatabaseWareSnapshot {
-		DatabaseWareSnapshot::MemSnapshot(Arc::new(snapshot))
+		DatabaseWareSnapshot::MemSnapshot(snapshot)
 	}
 
 	/**
@@ -236,7 +235,7 @@ impl DatabaseWareSnapshot {
 	* @param tab_name 表名
 	* @returns 表元信息
 	*/
-	pub async fn tab_info(&self, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub async fn tab_info(&self, tab_name: &Atom) -> Option<TabMeta> {
 		match self {
 			DatabaseWareSnapshot::MemSnapshot(shot) => {
 				shot.tab_info(tab_name).await
@@ -253,7 +252,7 @@ impl DatabaseWareSnapshot {
 	* @param meta 表元信息
 	* @returns
 	*/
-	pub fn check(&self, tab: &Atom, meta: &Option<Arc<TabMeta>>) -> DBResult {
+	pub fn check(&self, tab: &Atom, meta: &Option<TabMeta>) -> DBResult {
 		match self {
 			DatabaseWareSnapshot::MemSnapshot(shot) => {
 				shot.check(tab, meta)
@@ -270,7 +269,7 @@ impl DatabaseWareSnapshot {
 	* @param meta 表元信息, 如果为None， 表示删除表
 	* @returns
 	*/
-	pub async fn alter(&self, tab_name: &Atom, meta: Option<Arc<TabMeta>>) {
+	pub async fn alter(&self, tab_name: &Atom, meta: Option<TabMeta>) {
 		match self {
 			DatabaseWareSnapshot::MemSnapshot(shot) => {
 				shot.alter(tab_name, meta).await
@@ -353,7 +352,7 @@ impl DatabaseWareSnapshot {
 	* @param id 事务的唯一标识id
 	* @returns
 	*/
-	pub async fn commit(&self, id: &Guid) {
+	pub async fn commit(&mut self, id: &Guid) {
 		match self {
 			DatabaseWareSnapshot::MemSnapshot(shot) => {
 				shot.commit(id).await
@@ -388,11 +387,12 @@ impl DatabaseWareSnapshot {
 * @param id 事务的唯一标识id
 * @returns
 */
+#[derive(Clone)]
 pub enum DatabaseWare {
 	// 内存库
-	MemWare(Arc<MemDB>),
+	MemWare(MemDB),
 	// 日志文件库
-	LogFileWare(Arc<LogFileDB>)
+	LogFileWare(LogFileDB)
 }
 
 unsafe impl Send for DatabaseWare {}
@@ -405,7 +405,7 @@ impl DatabaseWare {
 	* @returns
 	*/
 	pub fn new_mem_ware(db: MemDB) -> DatabaseWare {
-		DatabaseWare::MemWare(Arc::new(db))
+		DatabaseWare::MemWare(db)
 	}
 
 	/**
@@ -414,22 +414,22 @@ impl DatabaseWare {
 	* @returns
 	*/
 	pub fn new_log_file_ware(db: LogFileDB) -> DatabaseWare {
-		DatabaseWare::LogFileWare(Arc::new(db))
+		DatabaseWare::LogFileWare(db)
 	}
 
 	/**
 	* 拷贝全部的表
 	* @returns
 	*/
-	async fn tabs_clone(&self) -> Arc<DatabaseWare> {
+	async fn tabs_clone(&self) -> DatabaseWare {
 		match self {
 			DatabaseWare::MemWare(memdb) => {
 				let cloned = memdb.tabs_clone().await;
-				Arc::new(DatabaseWare::MemWare(cloned))
+				DatabaseWare::MemWare(cloned)
 			}
 			DatabaseWare::LogFileWare(logfiledb) => {
 				let cloned = logfiledb.tabs_clone().await;
-				Arc::new(DatabaseWare::LogFileWare(cloned))
+				DatabaseWare::LogFileWare(cloned)
 			}
 		}
 	}
@@ -438,15 +438,15 @@ impl DatabaseWare {
 	* 获取当前表结构快照
 	* @returns
 	*/
-	async fn snapshot(&self) -> Arc<DatabaseWareSnapshot> {
+	async fn snapshot(&self) -> DatabaseWareSnapshot {
 		match self {
 			DatabaseWare::MemWare(memdb) => {
 				let shot = memdb.snapshot().await;
-				Arc::new(DatabaseWareSnapshot::MemSnapshot(shot))
+				DatabaseWareSnapshot::MemSnapshot(shot)
 			}
 			DatabaseWare::LogFileWare(logfiledb) => {
 				let shot = logfiledb.snapshot().await;
-				Arc::new(DatabaseWareSnapshot::LogFileSnapshot(shot))
+				DatabaseWareSnapshot::LogFileSnapshot(shot)
 			}
 		}
 	}
@@ -456,7 +456,7 @@ impl DatabaseWare {
 	* @param tab_name 表名
 	* @returns 表的元信息
 	*/
-	async fn tab_info(&self, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	async fn tab_info(&self, tab_name: &Atom) -> Option<TabMeta> {
 		match self {
 			DatabaseWare::MemWare(memdb) => {
 				memdb.tab_info(tab_name).await
@@ -767,9 +767,9 @@ impl DatabaseTabTxn {
 */
 enum DatabaseMetaTxn {
 	// 内存数据库元信息事务
-	MemMetaTxn(Arc<MemeryMetaTxn>),
+	MemMetaTxn(MemeryMetaTxn),
 	// 日志文件数据库元信息事务
-	LogFileMetaTxn(Arc<LogFileMetaTxn>)
+	LogFileMetaTxn(LogFileMetaTxn)
 }
 
 impl DatabaseMetaTxn {
@@ -779,7 +779,7 @@ impl DatabaseMetaTxn {
 	* @returns 索引迭代器
 	*/
 	fn new_mem_meta_txn(txn: MemeryMetaTxn) -> DatabaseMetaTxn {
-		DatabaseMetaTxn::MemMetaTxn(Arc::new(txn))
+		DatabaseMetaTxn::MemMetaTxn(txn)
 	}
 
 	/**
@@ -788,7 +788,7 @@ impl DatabaseMetaTxn {
 	* @returns 索引迭代器
 	*/
 	fn new_log_file_meta_txn(txn: LogFileMetaTxn) -> DatabaseMetaTxn {
-		DatabaseMetaTxn::LogFileMetaTxn(Arc::new(txn))
+		DatabaseMetaTxn::LogFileMetaTxn(txn)
 	}
 
 	/**
@@ -797,7 +797,7 @@ impl DatabaseMetaTxn {
 	* @param _meta 元信息
 	* @returns 修改结果
 	*/
-	async fn alter(&self, tab_name: &Atom, meta: Option<Arc<TabMeta>>) -> DBResult {
+	async fn alter(&self, tab_name: &Atom, meta: Option<TabMeta>) -> DBResult {
 		match self {
 			DatabaseMetaTxn::MemMetaTxn(txn) => {
 				txn.alter(tab_name, meta).await
@@ -911,7 +911,7 @@ impl WareMap {
 		WareMap(OrdMap::new(Tree::from_order(wares)))
 	}
 
-	fn register(&mut self, ware_name: Atom, ware: Arc<DatabaseWare>) -> bool {
+	fn register(&mut self, ware_name: Atom, ware: DatabaseWare) -> bool {
 		self.0.insert(ware_name, ware)
 	}
 
@@ -922,14 +922,14 @@ impl WareMap {
 		}
 	}
 
-	fn find(&self, ware_name: &Atom) -> Option<Arc<DatabaseWare>> {
+	fn find(&self, ware_name: &Atom) -> Option<DatabaseWare> {
 		match self.0.get(&ware_name) {
 			Some(b) => Some(b.clone()),
 			_ => None
 		}
 	}
 
-	fn keys(&self, key: Option<&Atom>, descending: bool) -> Keys<Tree<Atom, Arc<DatabaseWare>>> {
+	fn keys(&self, key: Option<&Atom>, descending: bool) -> Keys<Tree<Atom, DatabaseWare>> {
 		self.0.keys(key, descending)
 	}
 }
@@ -940,7 +940,7 @@ pub struct Tr {
 	writable: bool,
 	timeout: usize, // 子事务的预提交的超时时间, TODO 取提交的库的最大超时时间
 	id: Guid,
-	ware_log_map: XHashMap<Atom, Arc<DatabaseWareSnapshot>>,// 库名对应库快照
+	ware_log_map: XHashMap<Atom, DatabaseWareSnapshot>,// 库名对应库快照
 	state: TxState,
 	tab_txns: XHashMap<(Atom, Atom), Arc<DatabaseTabTxn>>, //表事务表
 	meta_txns: XHashMap<Atom, Arc<DatabaseMetaTxn>>, //元信息事务表
@@ -1065,7 +1065,7 @@ impl Tr {
 		let alter_len = self.meta_txns.len();
 		if alter_len > 0 {
 			for ware in self.meta_txns.keys() {
-				self.ware_log_map.get(ware).unwrap().commit(&self.id).await;
+				self.ware_log_map.get_mut(ware).unwrap().commit(&self.id).await;
 			}
 		}
 		let len = self.tab_txns.len() + alter_len + self.fork_txns.len();
@@ -1429,7 +1429,7 @@ impl Tr {
 	* @param meta 表元信息， None 表示删除表
 	* @returns 元信息操作结果
 	*/
-	pub async fn alter(&mut self, ware_name: &Atom, tab_name: &Atom, meta: Option<Arc<TabMeta>>) -> DBResult {
+	pub async fn alter(&mut self, ware_name: &Atom, tab_name: &Atom, meta: Option<TabMeta>) -> DBResult {
 		self.state = TxState::Doing;
 		let ware = match self.ware_log_map.get(ware_name) {
 			Some(w) => match w.check(tab_name, &meta) { // 检查
@@ -1479,7 +1479,7 @@ impl Tr {
 	* @param tab_name 表名
 	* @returns 表元信息
 	*/
-	pub async fn tab_info(&self, ware_name:&Atom, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub async fn tab_info(&self, ware_name:&Atom, tab_name: &Atom) -> Option<TabMeta> {
 		match self.ware_log_map.get(ware_name) {
 			Some(ware) => ware.tab_info(tab_name).await,
 			_ => None

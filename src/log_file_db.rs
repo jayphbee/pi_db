@@ -41,7 +41,7 @@ pub const DB_META_TAB_NAME: &'static str = "tabs_meta";
 * 基于file log的数据库
 */
 #[derive(Clone)]
-pub struct LogFileDB(Arc<Tabs>);
+pub struct LogFileDB(Tabs);
 
 impl LogFileDB {
 	/**
@@ -92,7 +92,7 @@ impl LogFileDB {
 		for (k, v) in map.iter() {
 			let tab_name = Atom::decode(&mut ReadBuffer::new(k, 0)).unwrap();
 			let meta = TableMetaInfo::decode(&mut ReadBuffer::new(v.clone().to_vec().as_ref(), 0)).unwrap();
-			tabs.set_tab_meta(tab_name.clone(), Arc::new(meta.meta.clone())).await;
+			tabs.set_tab_meta(tab_name.clone(), meta.meta.clone()).await;
 			ALL_TABLES.lock().await.insert(tab_name.clone(), meta);
 
 			async_map.join(AsyncRuntime::Multi(rt.clone()), async move {
@@ -122,7 +122,7 @@ impl LogFileDB {
 
 		info!("total tabs: {:?}, time: {:?}, {} KB", count, start.elapsed(), format!("{0} {1:.2}", "total size", LOG_FILE_TOTAL_SIZE.load(Ordering::Relaxed) as f64 / 1024.0));
 
-		LogFileDB(Arc::new(tabs))
+		LogFileDB(tabs)
 	}
 
 	pub async fn open(tab: &Atom) -> SResult<LogFileTab> {
@@ -265,24 +265,24 @@ impl LogFileDB {
 	}
 
 	// 拷贝全部的表
-	pub async fn tabs_clone(&self) -> Arc<Self> {
-		Arc::new(LogFileDB(Arc::new(self.0.clone_map())))
+	pub async fn tabs_clone(&self) -> Self {
+		LogFileDB(self.0.clone_map())
 	}
 	// 列出全部的表
 	pub async fn list(&self) -> Box<dyn Iterator<Item=Atom>> {
-		Box::new(self.0.list().await)
+		Box::new(self.0.list())
 	}
 	// 获取该库对预提交后的处理超时时间, 事务会用最大超时时间来预提交
 	pub fn timeout(&self) -> usize {
 		TIMEOUT
 	}
 	// 表的元信息
-	pub async fn tab_info(&self, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub async fn tab_info(&self, tab_name: &Atom) -> Option<TabMeta> {
 		self.0.get(tab_name).await
 	}
 	// 获取当前表结构快照
-	pub async fn snapshot(&self) -> Arc<LogFileDBSnapshot> {
-		Arc::new(LogFileDBSnapshot(self.clone(), Mutex::new(self.0.snapshot().await)))
+	pub async fn snapshot(&self) -> LogFileDBSnapshot {
+		LogFileDBSnapshot(LogFileDB(self.0.clone_map()), Mutex::new(self.0.snapshot().await))
 	}
 }
 
@@ -295,15 +295,15 @@ impl LogFileDBSnapshot {
 		Box::new(self.1.lock().await.list())
 	}
 	// 表的元信息
-	pub async fn tab_info(&self, tab_name: &Atom) -> Option<Arc<TabMeta>> {
+	pub async fn tab_info(&self, tab_name: &Atom) -> Option<TabMeta> {
 		self.1.lock().await.get(tab_name)
 	}
 	// 检查该表是否可以创建
-	pub fn check(&self, _tab: &Atom, _meta: &Option<Arc<TabMeta>>) -> DBResult {
+	pub fn check(&self, _tab: &Atom, _meta: &Option<TabMeta>) -> DBResult {
 		Ok(())
 	}
 	// 新增 修改 删除 表
-	pub async fn alter(&self, tab_name: &Atom, meta: Option<Arc<TabMeta>>) {
+	pub async fn alter(&self, tab_name: &Atom, meta: Option<TabMeta>) {
 		self.1.lock().await.alter(tab_name, meta)
 	}
 	// 创建指定表的表事务
@@ -311,17 +311,17 @@ impl LogFileDBSnapshot {
 		self.1.lock().await.build(BuildDbType::LogFileDB, tab_name, id, writable).await
 	}
 	// 创建一个meta事务
-	pub fn meta_txn(&self, _id: &Guid) -> Arc<LogFileMetaTxn> {
-		Arc::new(LogFileMetaTxn {
+	pub fn meta_txn(&self, _id: &Guid) -> LogFileMetaTxn {
+		LogFileMetaTxn {
 			alters: Arc::new(Mutex::new(XHashMap::default())),
-		})
+		}
 	}
 	// 元信息的预提交
 	pub async fn prepare(&self, id: &Guid) -> DBResult{
 		(self.0).0.prepare(id, &mut *self.1.lock().await).await
 	}
 	// 元信息的提交
-	pub async fn commit(&self, id: &Guid){
+	pub async fn commit(&mut self, id: &Guid){
 		(self.0).0.commit(id).await
 	}
 	// 回滚
@@ -602,12 +602,12 @@ impl RefLogFileTxn {
 		match txn.prepare_inner().await {
 			Ok(()) => {
 				txn.state = TxState::PreparOk;
-				Box::into_raw(txn);
+				mem::forget(txn);
 				return Ok(())
 			},
 			Err(e) => {
 				txn.state = TxState::PreparFail;
-				Box::into_raw(txn);
+				mem::forget(txn);
 				return Err(e.to_string())
 			},
 		}
@@ -625,7 +625,7 @@ impl RefLogFileTxn {
 			Err(e) => {
 				txn.state = TxState::CommitFail;
 				// 提交失败, 回滚
-				Box::into_raw(txn);
+				mem::forget(txn);
 				return Err(e.to_string())
 			}
 		}
@@ -652,7 +652,7 @@ impl RefLogFileTxn {
 	pub async fn fork_prepare(&self, ware: Atom, tab_name: Atom, fork_tab_name: Atom, meta: TabMeta) -> DBResult {
 		let mut txn = self.get();
 		let res = txn.fork_prepare_inner(ware, tab_name, fork_tab_name, meta).await;
-		Box::into_raw(txn);
+		mem::forget(txn);
 		return res
 	}
 
@@ -666,7 +666,7 @@ impl RefLogFileTxn {
 			}
 			Err(e) => {
 				// 分叉提交失败，回滚
-				Box::into_raw(txn);
+				mem::forget(txn);
 				return Err(e.to_string())
 			}
 		}
@@ -693,7 +693,7 @@ impl RefLogFileTxn {
 		match txn.force_fork_inner().await {
 			Ok(index) => {
 				// 分叉成功
-				Box::into_raw(txn);
+				mem::forget(txn);
 				return Ok(index);
 			}
 			Err(e) => {
@@ -732,7 +732,7 @@ impl RefLogFileTxn {
 				}
 			)
 		}
-		Box::into_raw(txn);
+		mem::forget(txn);
 		Ok(value_arr)
 	}
 	// 修改，插入、删除及更新
@@ -760,7 +760,7 @@ impl RefLogFileTxn {
 		}
 
 		if success {
-			Box::into_raw(txn);
+			mem::forget(txn);
 			return Ok(())
 		} else {
 			// 修改失败，释放Box<FileMemTxn>
@@ -787,7 +787,7 @@ impl RefLogFileTxn {
 
 		let root = txn.root.clone();
 		let mem_iter = txn.root.iter( key, descending);
-		Box::into_raw(txn);
+		mem::forget(txn);
 		Ok(Box::new(MemIter::new(tab, root, mem_iter, filter)))
 	}
 	// 迭代
@@ -809,7 +809,7 @@ impl RefLogFileTxn {
 		let root = txn.root.clone();
 		let mem_key_iter = txn.root.keys(key, descending);
 		let tab = txn.tab.0.lock().await.tab.clone();
-		Box::into_raw(txn);
+		mem::forget(txn);
 		Ok(Box::new(MemKeyIter::new(&tab, root, mem_key_iter, filter)))
 	}
 	// 索引迭代
@@ -827,7 +827,7 @@ impl RefLogFileTxn {
 	pub async fn tab_size(&self) -> SResult<usize> {
 		let txn = self.get();
 		let size = txn.root.size();
-		Box::into_raw(txn);
+		mem::forget(txn);
 		Ok(size)
 	}
 }
@@ -922,12 +922,12 @@ impl Iter for MemKeyIter{
 
 #[derive(Clone)]
 pub struct LogFileMetaTxn {
-	alters: Arc<Mutex<XHashMap<Atom, Option<Arc<TabMeta>>>>>,
+	alters: Arc<Mutex<XHashMap<Atom, Option<TabMeta>>>>,
 }
 
 impl LogFileMetaTxn {
 	// 创建表、修改指定表的元数据
-	pub async fn alter(&self, tab_name: &Atom, meta: Option<Arc<TabMeta>>) -> DBResult {
+	pub async fn alter(&self, tab_name: &Atom, meta: Option<TabMeta>) -> DBResult {
 		self.alters.lock().await.insert(tab_name.clone(), meta);
 		Ok(())
 	}
@@ -1300,12 +1300,11 @@ impl LogFileTab {
 		}));
 
 		file.load(&mut store, Some(path), false).await;
-		let mut root= OrdMap::<Tree<Bon, Bin>>::new(None);
 		let mut load_size = 0;
 		let map = store.0.map.lock();
 		for (k, v) in map.iter() {
 			load_size += k.len() + v.len();
-			root.upsert(Bon::new(Arc::new(k.clone())), Arc::new(v.to_vec()), false);
+			file_mem_tab.root.upsert(Bon::new(Arc::new(k.clone())), Arc::new(v.to_vec()), false);
 		}
 		store.0.is_init.store(false, Ordering::SeqCst);
 		LOG_FILE_TOTAL_SIZE.fetch_add(load_size as u64, Ordering::Relaxed);
@@ -1338,14 +1337,12 @@ impl LogFileTab {
 			let map = store.0.map.lock();
 			for (k, v) in map.iter() {
 				load_size += k.len() + v.len();
-				root.upsert(Bon::new(Arc::new(k.clone())), Arc::new(v.to_vec()), false);
+				file_mem_tab.root.upsert(Bon::new(Arc::new(k.clone())), Arc::new(v.to_vec()), false);
 			}
 			log_file_id = tm.parent_log_id;
 			store.0.is_init.store(false, Ordering::SeqCst);
 			debug!("====> load tab: {:?} size: {:?}byte time elapsed: {:?} <====", tm.tab_name, load_size, start_time.elapsed());
 		}
-
-		file_mem_tab.root = root;
 
 		return LogFileTab(Arc::new(Mutex::new(file_mem_tab)), store);
 	}

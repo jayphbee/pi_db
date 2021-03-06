@@ -122,10 +122,10 @@ async fn setup_data() -> Mgr {
 	let rt = get_rt();
 	let mgr = Mgr::new(GuidGen::new(0, 0));
 	let ware = DatabaseWare::new_mem_ware(MemDB::new());
-	let _ = mgr.register(Atom::from("memory"), Arc::new(ware)).await;
+	let _ = mgr.register(Atom::from("memory"), ware).await;
 	let mut tr = mgr.transaction(true,Some(rt.clone())).await;
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(Arc::new(meta))).await;
+	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
 
 	tr.prepare().await;
 	tr.commit().await;
@@ -172,11 +172,11 @@ async fn test_mem_db_iter(mgr: Mgr) {
 async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	let mgr = Mgr::new(GuidGen::new(0, 0));
 	let ware = DatabaseWare::new_mem_ware(MemDB::new());
-	let _ = mgr.register(Atom::from("memory"), Arc::new(ware)).await;
+	let _ = mgr.register(Atom::from("memory"), ware).await;
 	let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(Arc::new(meta)));
+	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta));
 
 	tr.prepare().await;
 	tr.commit().await;
@@ -308,11 +308,11 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 	let mgr = Mgr::new(GuidGen::new(0, 0));
 	let ware = DatabaseWare::new_mem_ware(MemDB::new());
-	let _ = mgr.register(Atom::from("memory"), Arc::new(ware)).await;
+	let _ = mgr.register(Atom::from("memory"), ware).await;
 	let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(Arc::new(meta))).await;
+	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
 
 	tr.prepare().await;
 	tr.commit().await;
@@ -446,7 +446,7 @@ async fn test_mem_db_write() {
 	let rt = get_rt().clone();
 	let mgr = Mgr::new(GuidGen::new(0, 0));
 	let ware = DatabaseWare::new_mem_ware(MemDB::new());
-	let _ = mgr.register(Atom::from("memory"), Arc::new(ware)).await;
+	let _ = mgr.register(Atom::from("memory"), ware).await;
 	let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
@@ -454,7 +454,7 @@ async fn test_mem_db_write() {
 	tr.alter(
 		&Atom::from("memory"),
 		&Atom::from("hello"),
-		Some(Arc::new(meta)),
+		Some(meta),
 	)
 	.await;
 	let p = tr.prepare().await;
@@ -488,7 +488,7 @@ async fn test_mem_db_read() {
 	let rt = get_rt();
 	let mgr = Mgr::new(GuidGen::new(0, 0));
 	let ware = DatabaseWare::new_mem_ware(MemDB::new());
-	let _ = mgr.register(Atom::from("memory"), Arc::new(ware)).await;
+	let _ = mgr.register(Atom::from("memory"), ware).await;
 	let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
@@ -496,7 +496,7 @@ async fn test_mem_db_read() {
 	tr.alter(
 		&Atom::from("memory"),
 		&Atom::from("hello"),
-		Some(Arc::new(meta)),
+		Some(meta),
 	)
 	.await;
 	let p = tr.prepare().await;
