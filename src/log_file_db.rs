@@ -68,23 +68,23 @@ impl LogFileDB {
 			Ok(store) => store
 		};
 
-		let mut store = AsyncLogFileStore {
-			removed: Arc::new(SpinLock::new(XHashMap::default())),
-			map: Arc::new(SpinLock::new(BTreeMap::new())),
+		let mut store = AsyncLogFileStore(Arc::new(AsyncLogFileStoreInner {
+			removed: SpinLock::new(XHashMap::default()),
+			map: SpinLock::new(BTreeMap::new()),
 			log_file: file.clone(),
-			tmp_map: Arc::new(SpinLock::new(XHashMap::default())),
-			writable_path: Arc::new(SpinLock::new(None)),
-			is_statistics: Arc::new(AtomicBool::new(false)),
-			is_init: Arc::new(AtomicBool::new(true)),
-			statistics: Arc::new(SpinLock::new(VecDeque::new())),
-		};
+			tmp_map: SpinLock::new(XHashMap::default()),
+			writable_path: SpinLock::new(None),
+			is_statistics: AtomicBool::new(false),
+			is_init: AtomicBool::new(true),
+			statistics: SpinLock::new(VecDeque::new()),
+		}));
 
 		file.load(&mut store, None, false).await;
-		store.is_init.store(false, Ordering::SeqCst);
+		store.0.is_init.store(false, Ordering::SeqCst);
 
 		let mut tabs = Tabs::new();
 
-		let map = store.map.lock();
+		let map = store.0.map.lock();
 		let rt = STORE_RUNTIME.read().await.as_ref().unwrap().clone();
 		let mut async_map = rt.map();
 		let start = std::time::Instant::now();
@@ -137,12 +137,12 @@ impl LogFileDB {
 
 	pub async fn force_split() -> SResult<()> {
 		let meta = LogFileDB::open(&Atom::from(DB_META_TAB_NAME)).await.unwrap();
-		let map = meta.1.map.lock().clone();
+		let map = meta.1.0.map.lock().clone();
 
 		for (key, _) in map.iter() {
 			let tab_name = Atom::decode(&mut ReadBuffer::new(key, 0)).unwrap();
 			let mut file = LogFileDB::open(&tab_name).await.unwrap();
-			file.1.log_file.split().await;
+			file.1.0.log_file.split().await;
 		}
 
 		Ok(())
@@ -152,7 +152,7 @@ impl LogFileDB {
 	pub async fn collect() -> SResult<()> {
 		//获取LogFileDB的元信息
 		let meta = LogFileDB::open(&Atom::from(DB_META_TAB_NAME)).await.unwrap();
-		let map = meta.1.map.lock();
+		let map = meta.1.0.map.lock();
 
 		//遍历LogFileDB中的所有LogFileTab
 		for (key, _) in map.iter() {
@@ -163,7 +163,7 @@ impl LogFileDB {
 			let mut remove_logs = Vec::new();
 			let mut collect_logs = Vec::new();
 			let mut collected_logs = XHashMap::default();
-			for (log_path, log_len, key_len) in file.1.statistics.lock().iter() {
+			for (log_path, log_len, key_len) in file.1.0.statistics.lock().iter() {
 				if *key_len == 0 {
 					//当前只读日志文件中没有新的关键字，则准备移除当前只读日志文件，并继续选择下一个只读日志文件
 					remove_logs.push(log_path.clone());
@@ -183,23 +183,23 @@ impl LogFileDB {
 			}
 
 			//整理需要整理的只读日志文件
-			if let Err(e) = file.1.log_file.collect_logs(remove_logs, collect_logs, 1024 * 1024, false).await {
+			if let Err(e) = file.1.0.log_file.collect_logs(remove_logs, collect_logs, 1024 * 1024, false).await {
 				//整理指定的LogFileTab失败，则立即退出整理
 				return Err(format!("Collect LogFileTab failed, tab: {}, reason: {:?}", tab_name.as_str(), e));
 			}
 
 			//从LogFileTab中移除所有的只读日志文件统计信息
-			file.1.statistics.lock().clear();
+			file.1.0.statistics.lock().clear();
 
 			let collect_start_time = Instant::now();
 
 			//清理加载时的移除缓冲和临时键值缓冲，并设置为不需要统计
-			file.1.removed.lock().clear();
-			file.1.tmp_map.lock().clear();
-			file.1.is_statistics.store(false, Ordering::Relaxed);
+			file.1.0.removed.lock().clear();
+			file.1.0.tmp_map.lock().clear();
+			file.1.0.is_statistics.store(false, Ordering::Relaxed);
 
 			//获取整理后LogFileTab中的所有有效日志文件路径列表
-			if let Ok(mut log_paths) = read_log_paths(&file.1.log_file).await {
+			if let Ok(mut log_paths) = read_log_paths(&file.1.0.log_file).await {
 				//从大到小的分析整理后的日志文件，并更新LogFileTab的统计信息
 				let mut offset = None;
 				let rt = STORE_RUNTIME.read().await.as_ref().unwrap().clone();
@@ -254,11 +254,11 @@ impl LogFileDB {
 				}
 			}
 
-			file.1.tmp_map.lock().clear(); //清理临时键值缓冲区
+			file.1.0.tmp_map.lock().clear(); //清理临时键值缓冲区
 			info!("Collect LogFileTab ok, time: {:?}, tab: {}, Statistics: {:?}",
 				  Instant::now() - collect_start_time,
 				  tab_name.as_str(),
-				  &*file.1.statistics.lock());
+				  &*file.1.0.statistics.lock());
 		}
 
 		return Ok(());
@@ -550,16 +550,16 @@ impl FileMemTxn {
 			Ok(store) => store
 		};
 
-		let mut store = AsyncLogFileStore {
-			removed: Arc::new(SpinLock::new(XHashMap::default())),
-			map: Arc::new(SpinLock::new(BTreeMap::new())),
+		let mut store = AsyncLogFileStore(Arc::new(AsyncLogFileStoreInner {
+			removed: SpinLock::new(XHashMap::default()),
+			map: SpinLock::new(BTreeMap::new()),
 			log_file: file.clone(),
-			tmp_map: Arc::new(SpinLock::new(XHashMap::default())),
-			writable_path: Arc::new(SpinLock::new(None)),
-			is_statistics: Arc::new(AtomicBool::new(false)),
-			is_init: Arc::new(AtomicBool::new(true)),
-			statistics: Arc::new(SpinLock::new(VecDeque::new())),
-		};
+			tmp_map: SpinLock::new(XHashMap::default()),
+			writable_path: SpinLock::new(None),
+			is_statistics: AtomicBool::new(false),
+			is_init: AtomicBool::new(true),
+			statistics: SpinLock::new(VecDeque::new()),
+		}));
 
 		// 找到父表的元信息，将它的引用计数加一
 		ALL_TABLES.lock().await.entry(tab_name.clone()).and_modify(|tab| {
@@ -968,16 +968,16 @@ impl LogFileMetaTxn {
 				Ok(store) => store
 			};
 
-			let mut store = AsyncLogFileStore {
-				removed: Arc::new(SpinLock::new(XHashMap::default())),
-				map: Arc::new(SpinLock::new(BTreeMap::new())),
+			let mut store = AsyncLogFileStore(Arc::new(AsyncLogFileStoreInner {
+				removed: SpinLock::new(XHashMap::default()),
+				map: SpinLock::new(BTreeMap::new()),
 				log_file: file.clone(),
-				tmp_map: Arc::new(SpinLock::new(XHashMap::default())),
-				writable_path: Arc::new(SpinLock::new(None)),
-				is_statistics: Arc::new(AtomicBool::new(false)),
-				is_init: Arc::new(AtomicBool::new(true)),
-				statistics: Arc::new(SpinLock::new(VecDeque::new())),
-			};
+				tmp_map: SpinLock::new(XHashMap::default()),
+				writable_path: SpinLock::new(None),
+				is_statistics: AtomicBool::new(false),
+				is_init: AtomicBool::new(true),
+				statistics: SpinLock::new(VecDeque::new()),
+			}));
 
 			match meta {
 				Some(m) => {
@@ -1031,15 +1031,17 @@ impl LogFileMetaTxn {
 }
 
 #[derive(Clone)]
-pub struct AsyncLogFileStore {
-	pub removed: Arc<SpinLock<XHashMap<Vec<u8>, ()>>>,
-	pub map: Arc<SpinLock<BTreeMap<Vec<u8>, Arc<[u8]>>>>,
+pub struct AsyncLogFileStore(pub Arc<AsyncLogFileStoreInner>);
+
+pub struct AsyncLogFileStoreInner {
+	pub removed: SpinLock<XHashMap<Vec<u8>, ()>>,
+	pub map: SpinLock<BTreeMap<Vec<u8>, Arc<[u8]>>>,
 	pub log_file: LogFile,
-	pub tmp_map: Arc<SpinLock<XHashMap<Vec<u8>, ()>>>,
-	pub writable_path: Arc<SpinLock<Option<PathBuf>>>,
-	pub is_statistics: Arc<AtomicBool>,
-	pub is_init: Arc<AtomicBool>,
-	pub statistics: Arc<SpinLock<VecDeque<(PathBuf, u64, u64)>>>,
+	pub tmp_map: SpinLock<XHashMap<Vec<u8>, ()>>,
+	pub writable_path: SpinLock<Option<PathBuf>>,
+	pub is_statistics: AtomicBool,
+	pub is_init: AtomicBool,
+	pub statistics: SpinLock<VecDeque<(PathBuf, u64, u64)>>,
 }
 
 unsafe impl Send for AsyncLogFileStore {}
@@ -1047,18 +1049,18 @@ unsafe impl Sync for AsyncLogFileStore {}
 
 impl PairLoader for AsyncLogFileStore {
     fn is_require(&self, log_file: Option<&PathBuf>, key: &Vec<u8>) -> bool {
-		let b = !self.removed.lock().contains_key(key) && !self.tmp_map.lock().contains_key(key);
+		let b = !self.0.removed.lock().contains_key(key) && !self.0.tmp_map.lock().contains_key(key);
 
-		if self.is_statistics.load(Ordering::Relaxed) {
+		if self.0.is_statistics.load(Ordering::Relaxed) {
 			//需要统计
 			let mut init = false;
 			if !b {
 				//已删除的记录，则不需要加载，但需要统计
-				if let Some((path, log_len, key_len)) = self.statistics.lock().get_mut(0) {
+				if let Some((path, log_len, key_len)) = self.0.statistics.lock().get_mut(0) {
 					if path.to_str().unwrap() == log_file.as_ref().unwrap().to_str().unwrap() {
 						//指定只读日志文件的统计信息存在，则继续累计
 						*log_len += 1;
-						if !self.tmp_map.lock().contains_key(key) {
+						if !self.0.tmp_map.lock().contains_key(key) {
 							//如果需要加载的关键字不存在，则累计关键字数量
 							*key_len += 1;
 						}
@@ -1075,35 +1077,35 @@ impl PairLoader for AsyncLogFileStore {
 				//当前没有任何统计信息，则初始化统计信息
 				if !b {
 					//已删除的记录，则不需要加载，但需要统计
-					if self.tmp_map.lock().contains_key(key) {
+					if self.0.tmp_map.lock().contains_key(key) {
 						//如果不需要加载的关键字已存在，则不累计关键字数量
-						self.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 0));
+						self.0.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 0));
 					} else {
 						//如果不需要加载的关键字不存在，则累计关键字数量
-						self.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 1));
+						self.0.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 1));
 					}
 				} else {
 					//插入或更新的记录，需要加载，但不需要在判断是否加载时统计
-					self.statistics.lock().push_front((log_file.cloned().unwrap(), 0, 0));
+					self.0.statistics.lock().push_front((log_file.cloned().unwrap(), 0, 0));
 				}
 			}
 		} else {
-			if self.writable_path.lock().is_none() {
+			if self.0.writable_path.lock().is_none() {
 				//如果当前是可写日志文件，且未记录，则记录，并忽略统计
-				*self.writable_path.lock() = log_file.cloned();
+				*self.0.writable_path.lock() = log_file.cloned();
 			} else {
-				if self.writable_path.lock().as_ref().unwrap().to_str().unwrap() != log_file.as_ref().unwrap().to_str().unwrap() {
+				if self.0.writable_path.lock().as_ref().unwrap().to_str().unwrap() != log_file.as_ref().unwrap().to_str().unwrap() {
 					//当前可写日志文件已记录，且开始加载只读日志文件，则设置为需要统计，并开始初始化统计信息
 					if !b {
 						//已删除的记录，则不需要加载，但需要统计
-						self.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 1));
+						self.0.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 1));
 					} else {
 						//插入或更新的记录，需要加载，但不需要在判断是否加载时统计
-						self.statistics.lock().push_front((log_file.cloned().unwrap(), 0, 0));
+						self.0.statistics.lock().push_front((log_file.cloned().unwrap(), 0, 0));
 					}
 
 					//设置为需要统计
-					self.is_statistics.store(true, Ordering::SeqCst);
+					self.0.is_statistics.store(true, Ordering::SeqCst);
 				}
 			}
 		}
@@ -1112,14 +1114,14 @@ impl PairLoader for AsyncLogFileStore {
     }
 
     fn load(&mut self, log_file: Option<&PathBuf>, method: LogMethod, key: Vec<u8>, value: Option<Vec<u8>>) {
-		if self.is_statistics.load(Ordering::Relaxed) {
+		if self.0.is_statistics.load(Ordering::Relaxed) {
 			//需要统计
 			let mut init = false;
-			if let Some((path, log_len, key_len)) = self.statistics.lock().get_mut(0) {
+			if let Some((path, log_len, key_len)) = self.0.statistics.lock().get_mut(0) {
 				if path.to_str().unwrap() == log_file.as_ref().unwrap().to_str().unwrap() {
 					//指定只读日志文件的统计信息存在，则继续累计
 					*log_len += 1;
-					if !self.tmp_map.lock().contains_key(&key) {
+					if !self.0.tmp_map.lock().contains_key(&key) {
 						//如果需要加载的关键字不存在，则累计关键字数量
 						*key_len += 1;
 					}
@@ -1133,24 +1135,24 @@ impl PairLoader for AsyncLogFileStore {
 
 			if init {
 				//当前没有任何统计信息，则初始化统计信息
-				if self.tmp_map.lock().contains_key(&key) {
+				if self.0.tmp_map.lock().contains_key(&key) {
 					//如果需要加载的关键字已存在，则不累计关键字数量
-					self.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 0));
+					self.0.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 0));
 				} else {
 					//如果需要加载的关键字不存在，则累计关键字数量
-					self.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 1));
+					self.0.statistics.lock().push_front((log_file.cloned().unwrap(), 1, 1));
 				}
 			}
 		}
 
 		if let Some(value) = value {
-			if self.is_init.load(Ordering::Relaxed) {
+			if self.0.is_init.load(Ordering::Relaxed) {
 				//启动初始化，才写入键值缓冲区
-				self.map.lock().insert(key.clone(), value.into());
+				self.0.map.lock().insert(key.clone(), value.into());
 			}
-			self.tmp_map.lock().insert(key, ());
+			self.0.tmp_map.lock().insert(key, ());
 		} else {
-			self.removed.lock().insert(key, ());
+			self.0.removed.lock().insert(key, ());
 		}
     }
 }
@@ -1167,12 +1169,12 @@ impl AsyncLogFileStore {
 	pub async fn write_batch(&self, pairs: &[(&[u8], &[u8])]) -> Result<()> {
 		let mut id = 0;
 		for (key, value) in pairs {
-			id = self.log_file.append(LogMethod::PlainAppend, key, value);
+			id = self.0.log_file.append(LogMethod::PlainAppend, key, value);
 		}
-		match self.log_file.delay_commit(id, false, 0).await {
+		match self.0.log_file.delay_commit(id, false, 0).await {
 			Ok(_) => {
 				{
-					let mut map = self.map.lock();
+					let mut map = self.0.map.lock();
 					for (key, value) in pairs {
 						map.insert(key.to_vec(), value.clone().into());
 					}
@@ -1187,11 +1189,11 @@ impl AsyncLogFileStore {
 	}
 
 	pub async fn write(&self, key: Vec<u8>, value: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        let id = self.log_file.append(LogMethod::PlainAppend, key.as_ref(), value.as_ref());
-        if let Err(e) = self.log_file.delay_commit(id, false, 0).await {
+        let id = self.0.log_file.append(LogMethod::PlainAppend, key.as_ref(), value.as_ref());
+        if let Err(e) = self.0.log_file.delay_commit(id, false, 0).await {
             Err(e)
         } else {
-            if let Some(value) = self.map.lock().insert(key, value.into()) {
+            if let Some(value) = self.0.map.lock().insert(key, value.into()) {
                 //更新指定key的存储数据，则返回更新前的存储数据
                 Ok(Some(value.to_vec()))
             } else {
@@ -1201,7 +1203,7 @@ impl AsyncLogFileStore {
 	}
 	
 	pub fn read(&self, key: &[u8]) -> Option<Arc<[u8]>> {
-        if let Some(value) = self.map.lock().get(key) {
+        if let Some(value) = self.0.map.lock().get(key) {
             return Some(value.clone())
         }
 
@@ -1211,13 +1213,13 @@ impl AsyncLogFileStore {
 	pub async fn remove_batch(&self, keys: &[&[u8]]) -> Result<()> {
 		let mut id = 0;
 		for key in keys {
-			id = self.log_file.append(LogMethod::Remove, key, &[]);
+			id = self.0.log_file.append(LogMethod::Remove, key, &[]);
 		}
 
-		match self.log_file.delay_commit(id, false, 0).await {
+		match self.0.log_file.delay_commit(id, false, 0).await {
 			Ok(_) => {
 				for key in keys {
-					self.map.lock().remove(key.clone());
+					self.0.map.lock().remove(key.clone());
 				}
 				Ok(())
 			}
@@ -1226,11 +1228,11 @@ impl AsyncLogFileStore {
 	}
 
 	pub async fn remove(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        let id = self.log_file.append(LogMethod::Remove, key.as_ref(), &[]);
-        if let Err(e) = self.log_file.delay_commit(id, false, 0).await {
+        let id = self.0.log_file.append(LogMethod::Remove, key.as_ref(), &[]);
+        if let Err(e) = self.0.log_file.delay_commit(id, false, 0).await {
             Err(e)
         } else {
-            if let Some(value) = self.map.lock().remove(&key) {
+            if let Some(value) = self.0.map.lock().remove(&key) {
                 Ok(Some(value.to_vec()))
             } else {
                 Ok(None)
@@ -1239,14 +1241,14 @@ impl AsyncLogFileStore {
     }
 
     pub fn last_key(&self) -> Option<Vec<u8>> {
-        self.map.lock().iter().last().map(|(k, _)| {
+        self.0.map.lock().iter().last().map(|(k, _)| {
             k.clone()
         })
 	}
 	
 	/// 强制产生分裂
 	pub async fn force_fork(&self) -> Result<usize> {
-		self.log_file.split().await
+		self.0.log_file.split().await
 	}
 }
 
@@ -1286,26 +1288,26 @@ impl LogFileTab {
 			Ok(file) => file
 		};
 
-		let mut store = AsyncLogFileStore {
-			removed: Arc::new(SpinLock::new(XHashMap::default())),
-			map: Arc::new(SpinLock::new(BTreeMap::new())),
+		let mut store = AsyncLogFileStore(Arc::new(AsyncLogFileStoreInner {
+			removed: SpinLock::new(XHashMap::default()),
+			map: SpinLock::new(BTreeMap::new()),
 			log_file: file.clone(),
-			tmp_map: Arc::new(SpinLock::new(XHashMap::default())),
-			writable_path: Arc::new(SpinLock::new(None)),
-			is_statistics: Arc::new(AtomicBool::new(false)),
-			is_init: Arc::new(AtomicBool::new(true)),
-			statistics: Arc::new(SpinLock::new(VecDeque::new())),
-		};
+			tmp_map: SpinLock::new(XHashMap::default()),
+			writable_path: SpinLock::new(None),
+			is_statistics: AtomicBool::new(false),
+			is_init: AtomicBool::new(true),
+			statistics: SpinLock::new(VecDeque::new()),
+		}));
 
 		file.load(&mut store, Some(path), false).await;
 		let mut root= OrdMap::<Tree<Bon, Bin>>::new(None);
 		let mut load_size = 0;
-		let map = store.map.lock();
+		let map = store.0.map.lock();
 		for (k, v) in map.iter() {
 			load_size += k.len() + v.len();
 			root.upsert(Bon::new(Arc::new(k.clone())), Arc::new(v.to_vec()), false);
 		}
-		store.is_init.store(false, Ordering::SeqCst);
+		store.0.is_init.store(false, Ordering::SeqCst);
 		LOG_FILE_TOTAL_SIZE.fetch_add(load_size as u64, Ordering::Relaxed);
 		info!("load tab: {} {} KB", tab_name_clone.as_str(), format!("{0} {1:.2}", "size", load_size as f64 / 1024.0));
 
@@ -1315,16 +1317,16 @@ impl LogFileTab {
 				Err(e) => panic!("!!!!!!open table = {:?} failed, e: {:?}", tm.parent, e),
 				Ok(file) => file
 			};
-			let mut store = AsyncLogFileStore {
-				removed: Arc::new(SpinLock::new(XHashMap::default())),
-				map: Arc::new(SpinLock::new(BTreeMap::new())),
+			let mut store = AsyncLogFileStore(Arc::new(AsyncLogFileStoreInner {
+				removed: SpinLock::new(XHashMap::default()),
+				map: SpinLock::new(BTreeMap::new()),
 				log_file: file.clone(),
-				tmp_map: Arc::new(SpinLock::new(XHashMap::default())),
-				writable_path: Arc::new(SpinLock::new(None)),
-				is_statistics: Arc::new(AtomicBool::new(false)),
-				is_init: Arc::new(AtomicBool::new(true)),
-				statistics: Arc::new(SpinLock::new(VecDeque::new())),
-			};
+				tmp_map: SpinLock::new(XHashMap::default()),
+				writable_path: SpinLock::new(None),
+				is_statistics: AtomicBool::new(false),
+				is_init: AtomicBool::new(true),
+				statistics: SpinLock::new(VecDeque::new()),
+			}));
 	
 			let mut path = PathBuf::new();
 			path.push(tm.tab_name.clone().as_ref());
@@ -1333,13 +1335,13 @@ impl LogFileTab {
 	
 			let mut load_size = 0;
 			let start_time = Instant::now();
-			let map = store.map.lock();
+			let map = store.0.map.lock();
 			for (k, v) in map.iter() {
 				load_size += k.len() + v.len();
 				root.upsert(Bon::new(Arc::new(k.clone())), Arc::new(v.to_vec()), false);
 			}
 			log_file_id = tm.parent_log_id;
-			store.is_init.store(false, Ordering::SeqCst);
+			store.0.is_init.store(false, Ordering::SeqCst);
 			debug!("====> load tab: {:?} size: {:?}byte time elapsed: {:?} <====", tm.tab_name, load_size, start_time.elapsed());
 		}
 

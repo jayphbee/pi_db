@@ -26,12 +26,12 @@ pub fn collect_db(rt: MultiTaskRuntime<()>, start_at: u32) {
 			LAST_COLLECT_DATE.store(start.timestamp(), Ordering::Release);
 			LogFileDB::force_split().await; // 强制分裂
 			let meta = LogFileDB::open(&Atom::from(DB_META_TAB_NAME)).await.unwrap();
-			let map = meta.1.map.lock();
+			let map = meta.1.0.map.lock();
 			for (key, _) in map.iter() {
 				let tab_name = Atom::decode(&mut ReadBuffer::new(key, 0)).unwrap();
 				let mut file = LogFileDB::open(&tab_name).await.unwrap();
 				info!("collect tab {:?} ", tab_name);
-				file.1.log_file.collect(1024 * 1024, false).await;
+				file.1.0.log_file.collect(1024 * 1024, false).await;
 			}
 			let end = Local::now();
 			info!("db collect done, start time =  {}, end time = {}", start, end);

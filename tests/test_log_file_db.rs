@@ -6,7 +6,7 @@ use std::collections::{VecDeque, BTreeMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::bounded;
-use pi_db::{log_file_db::STORE_RUNTIME, mgr::{ DatabaseWare, Mgr }};
+use pi_db::{log_file_db::{AsyncLogFileStoreInner, STORE_RUNTIME}, mgr::{ DatabaseWare, Mgr }};
 use pi_db::log_file_db::{LOG_FILE_SIZE, AsyncLogFileStore, LogFileDB};
 use atom::Atom;
 use sinfo;
@@ -35,27 +35,27 @@ fn test_collect_log_file_db() {
 			Ok(file) => file
 		};
 
-		let mut store = AsyncLogFileStore {
-			removed: Arc::new(SpinLock::new(XHashMap::default())),
-			map: Arc::new(SpinLock::new(BTreeMap::new())),
+		let mut store = AsyncLogFileStore(Arc::new(AsyncLogFileStoreInner {
+			removed: SpinLock::new(XHashMap::default()),
+			map: SpinLock::new(BTreeMap::new()),
 			log_file: file.clone(),
-			tmp_map: Arc::new(SpinLock::new(XHashMap::default())),
-			writable_path: Arc::new(SpinLock::new(None)),
-			is_statistics: Arc::new(AtomicBool::new(false)),
-			is_init: Arc::new(AtomicBool::new(true)),
-			statistics: Arc::new(SpinLock::new(VecDeque::new())),
-		};
+			tmp_map: SpinLock::new(XHashMap::default()),
+			writable_path: SpinLock::new(None),
+			is_statistics: AtomicBool::new(false),
+			is_init: AtomicBool::new(true),
+			statistics: SpinLock::new(VecDeque::new()),
+		}));
 
 		file.load(&mut store, Some(path.clone()), false).await;
-		store.is_init.store(false, Ordering::SeqCst);
+		store.0.is_init.store(false, Ordering::SeqCst);
 
-		let map_len = store.map.lock().len();
-		let writable_path = store.writable_path.lock().as_ref().cloned();
-		let is_statistics = store.is_statistics.load(Ordering::Relaxed);
+		let map_len = store.0.map.lock().len();
+		let writable_path = store.0.writable_path.lock().as_ref().cloned();
+		let is_statistics = store.0.is_statistics.load(Ordering::Relaxed);
 		println!("!!!!!!load ok, path: {:?}, map len: {}, writable_path: {:?}, is_statistics: {}", path, map_len, writable_path, is_statistics);
 
 		let mut log_total_len = 0;
-		for (log_file, log_len, key_len) in store.statistics.lock().iter() {
+		for (log_file, log_len, key_len) in store.0.statistics.lock().iter() {
 			log_total_len += log_len;
 			println!("!!!!!!load ok, file: {:?}, log len: {}, key len: {}", log_file, log_len, key_len);
 		}
@@ -109,7 +109,7 @@ fn test_collect_log_file_db() {
 		let _ = tr.commit().await;
 
 		let mut tr = mgr.transaction(true, Some(rt_copy.clone())).await;
-		for index in 0..100000 {
+		for index in 0..100000i32 {
 			let mut items = vec![];
 
 			let mut wb = WriteBuffer::new();
@@ -131,7 +131,7 @@ fn test_collect_log_file_db() {
 		let _ = tr.commit().await;
 
 		let mut tr = mgr.transaction(true, Some(rt_copy.clone())).await;
-		for index in 0..100000 {
+		for index in 0..100000i32 {
 			let mut items = vec![];
 
 			let mut wb = WriteBuffer::new();
@@ -153,7 +153,7 @@ fn test_collect_log_file_db() {
 		let _ = tr.commit().await;
 
 		let mut tr = mgr.transaction(true, Some(rt_copy.clone())).await;
-		for index in 100000..200000 {
+		for index in 100000..200000i32 {
 			let mut items = vec![];
 
 			let mut wb = WriteBuffer::new();
@@ -175,7 +175,7 @@ fn test_collect_log_file_db() {
 		let _ = tr.commit().await;
 
 		let mut tr = mgr.transaction(true, Some(rt_copy.clone())).await;
-		for index in 0..100000 {
+		for index in 0..100000i32 {
 			let mut items = vec![];
 
 			let mut wb = WriteBuffer::new();
@@ -197,7 +197,7 @@ fn test_collect_log_file_db() {
 		let _ = tr.commit().await;
 
 		let mut tr = mgr.transaction(true, Some(rt_copy.clone())).await;
-		for index in 100000..200000 {
+		for index in 100000..200000i32 {
 			let mut items = vec![];
 
 			let mut wb = WriteBuffer::new();
