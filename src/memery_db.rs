@@ -207,7 +207,8 @@ pub struct MemeryTxn {
 	state: TxState,
 }
 
-pub struct RefMemeryTxn(Mutex<MemeryTxn>);
+// pub struct RefMemeryTxn(Mutex<MemeryTxn>);
+pub struct RefMemeryTxn(usize);
 
 impl MemeryTxn {
 	//开始事务
@@ -222,7 +223,7 @@ impl MemeryTxn {
 			rwlog: XHashMap::with_capacity_and_hasher(0, Default::default()),
 			state: TxState::Ok,
 		};
-		return RefMemeryTxn(Mutex::new(txn))
+		return RefMemeryTxn(Box::into_raw(Box::new(txn)) as usize)
 	}
 	//获取数据
 	pub async fn get(&mut self, key: Bin) -> Option<Bin> {
@@ -357,47 +358,64 @@ impl MemeryTxn {
 }
 
 impl RefMemeryTxn {
+	fn get(&self) -> Box<MemeryTxn> {
+		unsafe { Box::from_raw(self.0 as *mut _) }
+	}
+
 	// 获得事务的状态
 	pub async fn get_state(&self) -> TxState {
-		self.0.lock().await.state.clone()
+		self.get().state.clone()
 	}
 	// 预提交一个事务
 	pub async fn prepare(&self, _timeout: usize) -> DBResult {
-		let mut txn = self.0.lock().await;
+		let mut txn = self.get();
 		txn.state = TxState::Preparing;
 		match txn.prepare_inner().await {
 			Ok(()) => {
 				txn.state = TxState::PreparOk;
+				Box::into_raw(txn);
 				return Ok(())
 			},
 			Err(e) => {
 				txn.state = TxState::PreparFail;
+				Box::into_raw(txn);
 				return Err(e.to_string())
 			},
 		}
 	}
 	// 提交一个事务
 	pub async fn commit(&self) -> CommitResult {
-		let mut txn = self.0.lock().await;
+		let mut txn = self.get();
 		txn.state = TxState::Committing;
 		match txn.commit_inner().await {
 			Ok(log) => {
 				txn.state = TxState::Commited;
+				// 提交成功，释放 Box<MemeryTxn>
 				return Ok(log)
 			},
-			Err(e) => return Err(e.to_string()),
+			Err(e) => {
+				txn.state = TxState::CommitFail;
+				// 提交失败, 回滚
+				Box::into_raw(txn);
+				return Err(e.to_string())
+			}
 		}
 	}
 	// 回滚一个事务
 	pub async fn rollback(&self) -> DBResult {
-		let mut txn = self.0.lock().await;
+		let mut txn = self.get();
 		txn.state = TxState::Rollbacking;
 		match txn.rollback_inner().await {
 			Ok(()) => {
 				txn.state = TxState::Rollbacked;
+				// 回滚成功，释放 Box<MemeryTxn>
 				return Ok(())
 			},
-			Err(e) => return Err(e.to_string())
+			Err(e) => {
+				txn.state = TxState::RollbackFail;
+				// 回滚失败, 同样释放 Box<MemeryTxn>
+				return Err(e.to_string())
+			}
 		}
 	}
 
@@ -412,15 +430,16 @@ impl RefMemeryTxn {
 		_lock_time: Option<usize>,
 		_readonly: bool
 	) -> SResult<Vec<TabKV>> {
+		let mut txn = self.get();
 		let mut value_arr = Vec::new();
 		for tabkv in arr.iter() {
-			let value = match self.0.lock().await.get(tabkv.key.clone()).await {
+			let value = match txn.get(tabkv.key.clone()).await {
 				Some(v) => Some(v),
 				_ => None
 			};
 
 			value_arr.push(
-				TabKV {
+				TabKV{
 					ware: tabkv.ware.clone(),
 					tab: tabkv.tab.clone(),
 					key: tabkv.key.clone(),
@@ -429,30 +448,40 @@ impl RefMemeryTxn {
 				}
 			)
 		}
+		Box::into_raw(txn);
 		Ok(value_arr)
 	}
 	// 修改，插入、删除及更新
 	pub async fn modify(&self, arr: Arc<Vec<TabKV>>, _lock_time: Option<usize>, _readonly: bool) -> DBResult {
+		let mut txn = self.get();
+		let mut success = true;
 		for tabkv in arr.iter() {
-			if tabkv.value == None {
-				match self.0.lock().await.delete(tabkv.key.clone()).await {
-				Ok(_) => (),
-				Err(e) => 
-					{
-						return Err(e.to_string())
-					},
+			if tabkv.value.is_none() {
+				match txn.delete(tabkv.key.clone()).await {
+					Ok(_) => {},
+					Err(e) => {
+						success = false;
+						break;
+					}
 				};
 			} else {
-				match self.0.lock().await.upsert(tabkv.key.clone(), tabkv.value.clone().unwrap()).await {
-				Ok(_) => (),
-				Err(e) =>
-					{
-						return Err(e.to_string())
-					},
+				match txn.upsert(tabkv.key.clone(), tabkv.value.clone().unwrap()).await {
+					Ok(_) => {},
+					Err(e) => {
+						success = false;
+						break;
+					}
 				};
 			}
 		}
-		Ok(())
+
+		if success {
+			Box::into_raw(txn);
+			return Ok(())
+		} else {
+			// 修改失败，释放Box<MemeryTxn>
+			return Err("modify error".to_string())
+		}
 	}
 	// 迭代
 	pub async fn iter(
@@ -462,7 +491,7 @@ impl RefMemeryTxn {
 		descending: bool,
 		filter: Filter
 	) -> IterResult {
-		let b = self.0.lock().await;
+		let txn = self.get();
 		let key = match key {
 			Some(k) => Some(Bon::new(k)),
 			None => None,
@@ -472,7 +501,10 @@ impl RefMemeryTxn {
 			None => None,
 		};
 
-		Ok(Box::new(MemIter::new(tab, b.root.clone(), b.root.iter( key, descending), filter)))
+		let root = txn.root.clone();
+		let mem_iter = txn.root.iter( key, descending);
+		Box::into_raw(txn);
+		Ok(Box::new(MemIter::new(tab, root, mem_iter, filter)))
 	}
 	// 迭代
 	pub async fn key_iter(
@@ -481,7 +513,7 @@ impl RefMemeryTxn {
 		descending: bool,
 		filter: Filter
 	) -> KeyIterResult {
-		let b = self.0.lock().await;
+		let txn = self.get();
 		let key = match key {
 			Some(k) => Some(Bon::new(k)),
 			None => None,
@@ -490,8 +522,11 @@ impl RefMemeryTxn {
 			&Some(ref k) => Some(k),
 			None => None,
 		};
-		let tab = b.tab.0.lock().await.tab.clone();
-		Ok(Box::new(MemKeyIter::new(&tab, b.root.clone(), b.root.keys(key, descending), filter)))
+		let root = txn.root.clone();
+		let mem_key_iter = txn.root.keys(key, descending);
+		let tab = txn.tab.0.lock().await.tab.clone();
+		Box::into_raw(txn);
+		Ok(Box::new(MemKeyIter::new(&tab, root, mem_key_iter, filter)))
 	}
 	// 索引迭代
 	pub fn index(
@@ -502,12 +537,14 @@ impl RefMemeryTxn {
 		_descending: bool,
 		_filter: Filter,
 	) -> IterResult {
-		Err("not implemented".to_string())
+		Err("not implemeted".to_string())
 	}
 	// 表的大小
 	pub async fn tab_size(&self) -> SResult<usize> {
-		let txn = self.0.lock().await;
-		Ok(txn.root.size())
+		let txn = self.get();
+		let size = txn.root.size();
+		Box::into_raw(txn);
+		Ok(size)
 	}
 }
 
