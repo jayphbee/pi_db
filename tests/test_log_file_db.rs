@@ -25,7 +25,7 @@ fn test_collect_log_file_db() {
 	let rt: MultiTaskRuntime<()>  = pool.startup(false);
 
 	let rt_copy = rt.clone();
-	rt.spawn(rt.alloc(), async move {
+	let _ = rt.spawn(rt.alloc(), async move {
 		*STORE_RUNTIME.write().await = Some(rt_copy.clone());
 		LOG_FILE_SIZE.store(1, Ordering::SeqCst);
 
@@ -46,7 +46,7 @@ fn test_collect_log_file_db() {
 			statistics: SpinLock::new(VecDeque::new()),
 		}));
 
-		file.load(&mut store, Some(path.clone()), false).await;
+		let _ = file.load(&mut store, Some(path.clone()), false).await;
 		store.0.is_init.store(false, Ordering::SeqCst);
 
 		let map_len = store.0.map.lock().len();
@@ -76,14 +76,14 @@ fn test_collect_log_file_db() {
 
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		tr.alter(
+		let _ = tr.alter(
 			&Atom::from("./tests"),
 			&Atom::from("./tests/log"),
 			Some(meta),
 		)
 			.await;
-		tr.prepare().await;
-		tr.commit().await;
+		let _ = tr.prepare().await;
+		let _ = tr.commit().await;
 
 		println!("!!!!!!Init Tab");
 		let mut tr = mgr.transaction(true, Some(rt_copy.clone())).await;
@@ -253,11 +253,11 @@ fn test_log_file_db() {
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(meta)).await;
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/world"), Some(meta1)).await;
+		let _ = tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/hello"), Some(meta)).await;
+		let _ = tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/world"), Some(meta1)).await;
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
-		tr.commit().await;
+		let _ = tr.commit().await;
 
 		let info = tr.tab_info(&Atom::from("logfile"), &Atom::from("./testlogfile/hello")).await;
 		println!("info ---- {:?} ", info);
@@ -300,16 +300,16 @@ fn test_log_file_db() {
 
 		let r = tr2.modify(writes, None, false).await;
 		println!("logfile result = {:?}", r);
-		let p = tr2.prepare().await;
-		tr2.commit().await;
+		let _ = tr2.prepare().await;
+		let _ = tr2.commit().await;
 
 		let mut tr3 = mgr.transaction(false, Some(rt.clone())).await;
 		item1.value = None;
 
 		let q = tr3.query(vec![item1], None, false).await;
 		println!("query item = {:?}", q);
-		tr3.prepare().await;
-		tr3.commit().await;
+		let _ = tr3.prepare().await;
+		let _ = tr3.commit().await;
 
 		let mut tr4 = mgr.transaction(false, Some(rt.clone())).await;
 		let size = tr4.tab_size(&Atom::from("logfile"), &Atom::from("./testlogfile/hello")).await;
@@ -332,8 +332,8 @@ fn test_log_file_db() {
 		let tabs = tr4.list(&Atom::from("logfile")).await;
 		println!("tabs = {:?}", tabs);
 
-		tr4.prepare().await;
-		tr4.commit().await;
+		let _ = tr4.prepare().await;
+		let _ = tr4.commit().await;
 	});
 
 	std::thread::sleep(std::time::Duration::from_secs(20));
@@ -353,12 +353,11 @@ fn write_test_data() {
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab"), Some(meta)).await;
+		let _ = tr.alter(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab"), Some(meta)).await;
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
-		tr.commit().await;
+		let _ = tr.commit().await;
 
 		let info = tr.tab_info(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab")).await;
 		println!("info ---- {:?} ", info);
@@ -390,7 +389,7 @@ fn write_test_data() {
 		println!("logfile result = {:?}", r);
 		let p = tr2.prepare().await;
 		println!("prepare result {:?}", p);
-		tr2.commit().await;
+		let _ = tr2.commit().await;
 
 
 		let mut tr4 = mgr.transaction(false, Some(rt.clone())).await;
@@ -400,8 +399,8 @@ fn write_test_data() {
 		let tabs = tr4.list(&Atom::from("logfile")).await;
 		println!("tabs = {:?}", tabs);
 
-		tr4.prepare().await;
-		tr4.commit().await;
+		let _ = tr4.prepare().await;
+		let _ = tr4.commit().await;
 	});
 
 	std::thread::sleep(std::time::Duration::from_secs(200));
@@ -426,7 +425,7 @@ fn read_test_data() {
 		println!("alter result ==== {:?}", a);
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
-		tr.commit().await;
+		let _ = tr.commit().await;
 
 		let info = tr.tab_info(&Atom::from("logfile"), &Atom::from("./testlogfile/testtab")).await;
 		println!("info ---- {:?} ", info);
@@ -462,7 +461,7 @@ fn bench_log_file_write() {
     let mgr_copy = mgr.clone();
 
     let rt1 = rt.clone();
-    rt.spawn(rt.alloc(), async move {
+    let _ = rt.spawn(rt.alloc(), async move {
         if STORE_RUNTIME.read().await.is_none() {
             *STORE_RUNTIME.write().await = Some(rt1.clone());
         }
@@ -478,14 +477,14 @@ fn bench_log_file_write() {
 
         let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-        tr.alter(
+        let _ = tr.alter(
             &Atom::from("logfile"),
             &Atom::from("./testlogfile/hello"),
             Some(meta),
         )
         .await;
-        tr.prepare().await;
-        tr.commit().await;
+        let _ = tr.prepare().await;
+        let _ = tr.commit().await;
     });
 
     std::thread::sleep(std::time::Duration::from_millis(5000));
@@ -500,9 +499,9 @@ fn bench_log_file_write() {
 		for index in 0..100000 {
 			log_file_write(&rt_copy1, &mgr_copy, index).await;
 		}
-		s.send(());
+		let _ = s.send(());
 	});
-	r.recv();
+	let _ = r.recv();
 }
 
 async fn log_file_write(rt: &MultiTaskRuntime<()>, mgr: &Mgr, index: usize) {

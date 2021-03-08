@@ -1,6 +1,5 @@
 #![feature(test)]
 extern crate test;
-use lazy_static::lazy_static;
 use test::Bencher;
 
 use std::sync::Arc;
@@ -114,7 +113,7 @@ fn bench_mem_db_iter(b: &mut Bencher) {
 		let _ = rt.spawn(rt.alloc(), async move {
 			test_mem_db_iter(mgr_clone).await;
 		});
-		runner.run_once();
+		let _ = runner.run_once();
 	});
 }
 
@@ -125,10 +124,10 @@ async fn setup_data() -> Mgr {
 	let _ = mgr.register(Atom::from("memory"), ware).await;
 	let mut tr = mgr.transaction(true,Some(rt.clone())).await;
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
+	let _ = tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
 
-	tr.prepare().await;
-	tr.commit().await;
+	let _ = tr.commit().await;
+	let _ = tr.commit().await;
 
 	let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
 	
@@ -148,9 +147,9 @@ async fn setup_data() -> Mgr {
 		});
 	}
 
-	tr2.modify(items.clone(), None, false).await;
-	tr2.prepare().await;
-	tr2.commit().await;
+	let _ = tr2.modify(items.clone(), None, false).await;
+	let _ = tr2.prepare().await;
+	let _ = tr2.commit().await;
 
 	mgr
 }
@@ -161,12 +160,12 @@ async fn test_mem_db_iter(mgr: Mgr) {
 	
 	let mut iter = tr3.iter(&Atom::from("memory"), &Atom::from("hello"), None, false, None).await.unwrap();
 
-	while let Some(Ok(Some(elem))) = iter.next() {
+	while let Some(Ok(Some(_elem))) = iter.next() {
 		// println!("elem = {:?}", elem);
 	}
 
-	tr3.prepare().await;
-	tr3.commit().await;
+	let _ = tr3.prepare().await;
+	let _ = tr3.commit().await;
 }
 
 async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
@@ -176,10 +175,10 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta));
+	let _ = tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta));
 
-	tr.prepare().await;
-	tr.commit().await;
+	let _ = tr.commit().await;
+	let _ = tr.commit().await;
 
 	let mgr2 = mgr.clone();
 	let mgr3 = mgr.clone();
@@ -194,11 +193,9 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	let rt3  = rt.clone();
 	let rt4  = rt.clone();
 	let rt5  = rt.clone();
-	let rt6  = rt.clone();
 
 	async move {
 		map.join(AsyncRuntime::Multi(rt.clone()), async move {
-			let tr2 =  mgr2.transaction(true, Some(rt.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello1", 0..6);
 	
@@ -212,14 +209,13 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr2.transaction(true, Some(rt.clone())).await;
 	
-			let r = tr2.query(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.query(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt2.clone()), async move {
-			let tr2 =  mgr3.transaction(true, Some(rt2.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello2", 0..6);
 	
@@ -233,18 +229,17 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr3.transaction(true, Some(rt2.clone())).await;
 	
-			let r = tr2.query(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.query(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt3.clone()), async move {
-			let tr2 =  mgr4.transaction(true, Some(rt3.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello3", 0..6);
 	
-			let mut item1 = TabKV {
+			let item1 = TabKV {
 				ware: Atom::from("memory"),
 				tab: Atom::from("hello"),
 				key: Arc::new(wb.bytes.clone()),
@@ -254,14 +249,13 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr4.transaction(true, Some(rt3.clone())).await;
 	
-			let r = tr2.query(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.query(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt4.clone()), async move {
-			let tr2 =  mgr5.transaction(true, Some(rt4.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello4", 0..6);
 	
@@ -275,14 +269,13 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr5.transaction(true, Some(rt4.clone())).await;
 	
-			let r = tr2.query(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.query(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt5.clone()), async move {
-			let tr2 =  mgr6.transaction(true, Some(rt5.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello5", 0..6);
 	
@@ -296,12 +289,12 @@ async fn test_mem_db_concurrent_read(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr6.transaction(true, Some(rt5.clone())).await;
 	
-			let r = tr2.query(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.query(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
-		map.map(AsyncRuntime::Multi(rt1.clone())).await;
+		let _ = map.map(AsyncRuntime::Multi(rt1.clone())).await;
 	}.await
 }
 
@@ -312,10 +305,10 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 	let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-	tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
+	let _ = tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
 
-	tr.prepare().await;
-	tr.commit().await;
+	let _ = tr.commit().await;
+	let _ = tr.commit().await;
 
 	let mgr2 = mgr.clone();
 	let mgr3 = mgr.clone();
@@ -335,11 +328,10 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 
 	async move {
 		map.join(AsyncRuntime::Multi(rt.clone()), async move {
-			let tr2 =  mgr2.transaction(true, Some(rt1.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello1", 0..6);
 	
-			let mut item1 = TabKV {
+			let item1 = TabKV {
 				ware: Atom::from("memory"),
 				tab: Atom::from("hello"),
 				key: Arc::new(wb.bytes.clone()),
@@ -349,18 +341,17 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr2.transaction(true, Some(rt1.clone())).await;
 	
-			let r = tr2.modify(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.modify(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt2.clone()), async move {
-			let tr2 =  mgr3.transaction(true, Some(rt.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello2", 0..6);
 	
-			let mut item1 = TabKV {
+			let item1 = TabKV {
 				ware: Atom::from("memory"),
 				tab: Atom::from("hello"),
 				key: Arc::new(wb.bytes.clone()),
@@ -370,18 +361,17 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr3.transaction(true, Some(rt2.clone())).await;
 	
-			let r = tr2.modify(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.modify(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt3.clone()), async move {
-			let tr2 =  mgr4.transaction(true, Some(rt3.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello3", 0..6);
 	
-			let mut item1 = TabKV {
+			let item1 = TabKV {
 				ware: Atom::from("memory"),
 				tab: Atom::from("hello"),
 				key: Arc::new(wb.bytes.clone()),
@@ -391,14 +381,13 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr4.transaction(true, Some(rt3.clone())).await;
 	
-			let r = tr2.modify(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.modify(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt4.clone()), async move {
-			let tr2 =  mgr5.transaction(true, Some(rt4.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello4", 0..6);
 	
@@ -412,18 +401,17 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr5.transaction(true, Some(rt4.clone())).await;
 	
-			let r = tr2.modify(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.modify(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
 
 		map.join(AsyncRuntime::Multi(rt5.clone()), async move {
-			let tr2 =  mgr6.transaction(true, Some(rt5.clone())).await;
 			let mut wb = WriteBuffer::new();
 			wb.write_bin(b"hello5", 0..6);
 	
-			let mut item1 = TabKV {
+			let item1 = TabKV {
 				ware: Atom::from("memory"),
 				tab: Atom::from("hello"),
 				key: Arc::new(wb.bytes.clone()),
@@ -433,12 +421,12 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 	
 			let mut tr2 = mgr6.transaction(true, Some(rt5.clone())).await;
 	
-			let r = tr2.modify(vec![item1], None, false).await;
-			let p = tr2.prepare().await;
-			tr2.commit().await;
+			let _  = tr2.modify(vec![item1], None, false).await;
+			let _  = tr2.prepare().await;
+			let _ = tr2.commit().await;
 			Ok(())
 		});
-		map.map(AsyncRuntime::Multi(rt6.clone())).await;
+		let _ = map.map(AsyncRuntime::Multi(rt6.clone())).await;
 	}.await
 }
 
@@ -451,16 +439,16 @@ async fn test_mem_db_write() {
 
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-	tr.alter(
+	let _ = tr.alter(
 		&Atom::from("memory"),
 		&Atom::from("hello"),
 		Some(meta),
 	)
 	.await;
-	let p = tr.prepare().await;
-	tr.commit().await;
+	let _ = tr.commit().await;
+	let _ = tr.commit().await;
 
-	let info = tr
+	let _ = tr
 		.tab_info(&Atom::from("memory"), &Atom::from("hello"))
 		.await;
 
@@ -469,7 +457,7 @@ async fn test_mem_db_write() {
 
 	// println!("wb = {:?}", wb.bytes);
 
-	let mut item1 = TabKV {
+	let item1 = TabKV {
 		ware: Atom::from("memory"),
 		tab: Atom::from("hello"),
 		key: Arc::new(wb.bytes.clone()),
@@ -479,9 +467,9 @@ async fn test_mem_db_write() {
 
 	let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
 
-	let r = tr2.modify(vec![item1], None, false).await;
-	let p = tr2.prepare().await;
-	tr2.commit().await;
+	let _  = tr2.modify(vec![item1], None, false).await;
+	let _  = tr2.prepare().await;
+	let _ = tr2.commit().await;
 }
 
 async fn test_mem_db_read() {
@@ -493,16 +481,16 @@ async fn test_mem_db_read() {
 
 	let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-	tr.alter(
+	let _ = tr.alter(
 		&Atom::from("memory"),
 		&Atom::from("hello"),
 		Some(meta),
 	)
 	.await;
-	let p = tr.prepare().await;
-	tr.commit().await;
+	let _ = tr.commit().await;
+	let _ = tr.commit().await;
 
-	let info = tr
+	let _ = tr
 		.tab_info(&Atom::from("memory"), &Atom::from("hello"))
 		.await;
 
@@ -519,7 +507,7 @@ async fn test_mem_db_read() {
 
 	let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
 
-	let r = tr2.query(vec![item1], None, false).await;
-	let p = tr2.prepare().await;
-	tr2.commit().await;
+	let _  = tr2.query(vec![item1], None, false).await;
+	let _  = tr2.prepare().await;
+	let _ = tr2.commit().await;
 }

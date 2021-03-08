@@ -22,15 +22,10 @@ fn test_mem_db_iter() {
 		let _ = mgr.register(Atom::from("memory"), ware).await;
 		let mut tr = mgr.transaction(true, Some(rt.clone())).await;
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-		tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
+		let _ = tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
+		let _ = tr.prepare().await;
+		let _ = tr.commit().await;
 
-		tr.prepare().await;
-		tr.commit().await;
-
-		let mut tr5 = mgr.transaction(true, Some(rt.clone())).await;
-		let tab_info= mgr.tab_info(&Atom::from("memory"), &Atom::from("hello")).await;
-
-		let mgr2 = mgr.clone();
 		let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
 		
 		let mut items = vec![];
@@ -49,9 +44,9 @@ fn test_mem_db_iter() {
 			});
 		}
 
-		tr2.modify(items.clone(), None, false).await;
-		tr2.prepare().await;
-		tr2.commit().await;
+		let _ = tr2.modify(items.clone(), None, false).await;
+		let _ = tr2.prepare().await;
+		let _ = tr2.commit().await;
 
 		let mut tr3 = mgr.transaction(false, Some(rt.clone())).await;
 		let size = tr3.tab_size(&Atom::from("memory"), &Atom::from("hello")).await;
@@ -62,8 +57,8 @@ fn test_mem_db_iter() {
 			println!("elem = {:?}", elem);
 		}
 		
-		tr3.prepare().await;
-		tr3.commit().await;
+		let _ = tr3.prepare().await;
+		let _ = tr3.commit().await;
 	});
 	std::thread::sleep(std::time::Duration::from_secs(20));
 }
@@ -84,11 +79,11 @@ fn test_memory_db() {
 		let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 		let meta1 = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-		tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
-		tr.alter(&Atom::from("memory"), &Atom::from("world"), Some(meta1)).await;
+		let _ = tr.alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta)).await;
+		let _ = tr.alter(&Atom::from("memory"), &Atom::from("world"), Some(meta1)).await;
 		let p = tr.prepare().await;
 		println!("tr prepare ---- {:?}", p);
-		tr.commit().await;
+		let _ = tr.commit().await;
 
 		let info = tr.tab_info(&Atom::from("memory"), &Atom::from("hello")).await;
 		println!("info ---- {:?} ", info);
@@ -110,16 +105,16 @@ fn test_memory_db() {
 
 		let r = tr2.modify(vec![item1.clone()], None, false).await;
 		println!("modify result = {:?}", r);
-		let p = tr2.prepare().await;
-		tr2.commit().await;
+		let _ = tr2.prepare().await;
+		let _ = tr2.commit().await;
 
 		let mut tr3 = mgr.transaction(false, Some(rt.clone())).await;
 		item1.value = None;
 
 		let q = tr3.query(vec![item1], None, false).await;
 		println!("query item = {:?}", q);
-		tr3.prepare().await;
-		tr3.commit().await;
+		let _ = tr3.prepare().await;
+		let _ = tr3.commit().await;
 
 		let mut tr4 = mgr.transaction(false, Some(rt.clone())).await;
 		let size = tr4.tab_size(&Atom::from("memory"), &Atom::from("hello")).await;
@@ -142,8 +137,8 @@ fn test_memory_db() {
 		let tabs = tr4.list(&Atom::from("memory")).await;
 		println!("tabs = {:?}", tabs);
 
-		tr4.prepare().await;
-		tr4.commit().await;
+		let _ = tr4.prepare().await;
+		let _ = tr4.commit().await;
 	});
 
 	std::thread::sleep(std::time::Duration::from_secs(2));

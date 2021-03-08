@@ -19,7 +19,6 @@ use r#async::rt::multi_thread::{MultiTaskPool, MultiTaskRuntime};
 use r#async::rt::{AsyncRuntime, AsyncValue};
 use r#async::lock::spin_lock::SpinLock;
 use async_file::file::{AsyncFile, AsyncFileOptions};
-use num_cpus;
 
 use crate::db::{Bin, TabKV, SResult, IterResult, KeyIterResult, NextResult, Event, Filter, TxState, Iter, RwLog, Bon, TabMeta, CommitResult, DBResult};
 use crate::tabs::{TabLog, Tabs, Prepare};
