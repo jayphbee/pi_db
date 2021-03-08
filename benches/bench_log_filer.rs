@@ -74,20 +74,19 @@ fn bench_log_file_write(b: &mut Bencher) {
         let ware = DatabaseWare::new_log_file_ware(
             LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
         );
-        let _ = mgr_copy
-            .register(Atom::from("logfile"), ware)
-            .await;
+        let _ = mgr_copy.register(Atom::from("logfile"), ware).await;
 
         let mut tr = mgr_copy.transaction(true, Some(rt1.clone())).await;
 
         let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-        let _ = tr.alter(
-            &Atom::from("logfile"),
-            &Atom::from("./testlogfile/hello"),
-            Some(meta),
-        )
-        .await;
+        let _ = tr
+            .alter(
+                &Atom::from("logfile"),
+                &Atom::from("./testlogfile/hello"),
+                Some(meta),
+            )
+            .await;
         let _ = tr.prepare().await;
         let _ = tr.commit().await;
     });
@@ -127,20 +126,19 @@ fn bench_log_file_read(b: &mut Bencher) {
         let ware = DatabaseWare::new_log_file_ware(
             LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
         );
-        let _ = mgr_copy
-            .register(Atom::from("logfile"), ware)
-            .await;
+        let _ = mgr_copy.register(Atom::from("logfile"), ware).await;
 
         let mut tr = mgr_copy.transaction(true, Some(rt1.clone())).await;
 
         let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
 
-        let _ = tr.alter(
-            &Atom::from("logfile"),
-            &Atom::from("./testlogfile/hello"),
-            Some(meta),
-        )
-        .await;
+        let _ = tr
+            .alter(
+                &Atom::from("logfile"),
+                &Atom::from("./testlogfile/hello"),
+                Some(meta),
+            )
+            .await;
         let _ = tr.prepare().await;
         let _ = tr.commit().await;
     });
@@ -270,8 +268,8 @@ async fn test_log_file_db_concurrent_read(rt: MultiTaskRuntime<()>, mgr: Mgr) {
 
             let mut tr2 = mgr3.transaction(true, Some(rt.clone())).await;
 
-            let _  = tr2.query(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.query(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -292,8 +290,8 @@ async fn test_log_file_db_concurrent_read(rt: MultiTaskRuntime<()>, mgr: Mgr) {
 
             let mut tr2 = mgr4.transaction(true, Some(rt2.clone())).await;
 
-            let _  = tr2.query(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.query(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -314,8 +312,8 @@ async fn test_log_file_db_concurrent_read(rt: MultiTaskRuntime<()>, mgr: Mgr) {
 
             let mut tr2 = mgr5.transaction(true, Some(rt3.clone())).await;
 
-            let _  = tr2.query(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.query(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -336,8 +334,8 @@ async fn test_log_file_db_concurrent_read(rt: MultiTaskRuntime<()>, mgr: Mgr) {
 
             let mut tr2 = mgr6.transaction(true, Some(rt4.clone())).await;
 
-            let _  = tr2.query(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.query(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -396,8 +394,8 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 
             let mut tr2 = mgr2.transaction(true, Some(rt1.clone())).await;
 
-            let _  = tr2.modify(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.modify(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -418,8 +416,8 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 
             let mut tr2 = mgr3.transaction(true, Some(rt2.clone())).await;
 
-            let _  = tr2.modify(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.modify(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -440,8 +438,8 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 
             let mut tr2 = mgr4.transaction(true, Some(rt3.clone())).await;
 
-            let _  = tr2.modify(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.modify(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -462,8 +460,8 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 
             let mut tr2 = mgr5.transaction(true, Some(rt4.clone())).await;
 
-            let _  = tr2.modify(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.modify(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -485,8 +483,8 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 
             let mut tr2 = mgr6.transaction(true, Some(rt5.clone())).await;
 
-            let _  = tr2.modify(items, None, false).await;
-            let _  = tr2.prepare().await;
+            let _ = tr2.modify(items, None, false).await;
+            let _ = tr2.prepare().await;
             let _ = tr2.commit().await;
             Ok(())
         });
@@ -509,7 +507,7 @@ async fn log_file_read(rt: &MultiTaskRuntime<()>, mgr: &Mgr) {
         index: 0,
     };
 
-    let _  = tr.query(vec![item1], None, false).await;
+    let _ = tr.query(vec![item1], None, false).await;
     let _ = tr.prepare().await;
     let _ = tr.commit().await;
 }
