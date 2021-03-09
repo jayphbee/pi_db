@@ -1,5 +1,6 @@
 #![feature(test)]
 extern crate test;
+use crossbeam_channel::bounded;
 use test::Bencher;
 
 use std::{sync::atomic::AtomicBool, thread, time::Duration};
@@ -94,8 +95,40 @@ fn bench_mem_db_read_single_tab(b: &mut Bencher) {
     let pool = MultiTaskPool::new("Store-Runtime".to_string(), 4, 1024 * 1024, 10, Some(10));
     let rt: MultiTaskRuntime<()> = pool.startup(true);
 
+	let mut wb = WriteBuffer::new();
+    wb.write_bin(b"hello", 0..5);
+	let item1 = TabKV {
+        ware: Atom::from("memory"),
+        tab: Atom::from("hello"),
+        key: Arc::new(wb.bytes.clone()),
+        value: Some(Arc::new(wb.bytes)),
+        index: 0,
+    };
+	let mgr = Mgr::new(GuidGen::new(0, 0));
+
+	let rt_copy1 = rt.clone();
+	let mgr_copy = mgr.clone();
+	let item2 = item1.clone();
+	let rt_copy2 = rt.clone();
+	let _ = rt_copy1.spawn(rt_copy1.alloc(), async move {
+        let mgr_copy = mgr_copy.clone();
+		test_mem_db_write(&rt_copy2, &mgr_copy, vec![item2.clone()]).await;
+	});
+
+	thread::sleep(Duration::from_secs(2));
+	let mgr_copy1 = mgr.clone();
+
     b.iter(|| {
-        let _ = rt.spawn(rt.alloc(), async move { test_mem_db_read().await });
+		let rt_copy2 = rt_copy1.clone();
+        let mgr_copy = mgr_copy1.clone();
+		let item = item1.clone();
+
+		let (s, r) = bounded(1);
+        let _ = rt_copy1.spawn(rt_copy1.alloc(), async move {
+			test_mem_db_read(&rt_copy2, &mgr_copy, vec![item.clone()]).await;
+			let _ = s.send(());
+		});
+		let _ =  r.recv();
     });
 }
 
@@ -495,39 +528,11 @@ async fn test_mem_db_write(rt: &MultiTaskRuntime<()>, mgr: &Mgr, item: Vec<TabKV
 	}
 }
 
-async fn test_mem_db_read() {
-    let rt = get_rt();
-    let mgr = Mgr::new(GuidGen::new(0, 0));
-    let ware = DatabaseWare::new_mem_ware(MemDB::new());
-    let _ = mgr.register(Atom::from("memory"), ware).await;
-    let mut tr = mgr.transaction(true, Some(rt.clone())).await;
-
-    let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-
-    let _ = tr
-        .alter(&Atom::from("memory"), &Atom::from("hello"), Some(meta))
-        .await;
-    let _ = tr.commit().await;
-    let _ = tr.commit().await;
-
-    let _ = tr
-        .tab_info(&Atom::from("memory"), &Atom::from("hello"))
-        .await;
-
-    let mut wb = WriteBuffer::new();
-    wb.write_bin(b"hello", 0..5);
-
-    let item1 = TabKV {
-        ware: Atom::from("memory"),
-        tab: Atom::from("hello"),
-        key: Arc::new(wb.bytes.clone()),
-        value: Some(Arc::new(wb.bytes)),
-        index: 0,
-    };
-
-    let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
-
-    let _ = tr2.query(vec![item1], None, false).await;
-    let _ = tr2.prepare().await;
-    let _ = tr2.commit().await;
+async fn test_mem_db_read(rt: &MultiTaskRuntime<()>, mgr: &Mgr, item: Vec<TabKV>) {
+	for _ in 0..1000 {
+		let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
+		let _ = tr2.query(item.clone(), None, false).await;
+		let _ = tr2.prepare().await;
+		let _ = tr2.commit().await;
+	}
 }
