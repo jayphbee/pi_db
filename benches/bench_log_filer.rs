@@ -100,9 +100,9 @@ fn bench_log_file_write(b: &mut Bencher) {
 
         let (s, r) = bounded(1);
         let _ = rt.spawn(rt.alloc(), async move {
-            for index in 0..1000 {
-                log_file_write(&rt_copy1, &mgr_copy, index).await;
-            }
+            // for index in 0..1000 {
+                log_file_write(&rt_copy1, &mgr_copy, 0).await;
+            // }
             let _ = s.send(());
         });
         let _ = r.recv();

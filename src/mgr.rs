@@ -131,27 +131,11 @@ impl Mgr {
             tmp.push((k.clone(), v));
         }
 
+		for (k, v) in tmp {
+			map.insert(k, v.snapshot().await);
+		}
+
         let rt = rt.as_ref().unwrap().clone();
-        let mut async_map = rt.map();
-
-        for (k, v) in tmp {
-            async_map.join(AsyncRuntime::Multi(rt.clone()), async move {
-                let snap = v.snapshot().await;
-                Ok((k, snap))
-            });
-        }
-
-        match async_map.map(AsyncRuntime::Multi(rt.clone())).await {
-            Ok(res) => {
-                for r in res {
-                    if r.is_ok() {
-                        let pair = r.unwrap();
-                        map.insert(pair.0, pair.1);
-                    }
-                }
-            }
-            Err(e) => {}
-        }
 
         Tr {
             writable,

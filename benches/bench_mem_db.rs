@@ -82,7 +82,7 @@ fn bench_mem_db_write_single_tab(b: &mut Bencher) {
 	
 		let (s, r) = crossbeam_channel::bounded(1);
         let _ = rt.spawn(rt.alloc(), async move {
-            test_mem_db_write(&rt_copy1, &mgr_copy, vec![item]).await;
+			test_mem_db_write(&rt_copy1, &mgr_copy, vec![item.clone()]).await;
 			let _ = s.send(());
         });
 		let _ = r.recv();
@@ -487,10 +487,12 @@ async fn test_mem_db_concurrent_write(rt: MultiTaskRuntime<()>) {
 }
 
 async fn test_mem_db_write(rt: &MultiTaskRuntime<()>, mgr: &Mgr, item: Vec<TabKV>) {
-    let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
-    let _ = tr2.modify(item, None, false).await;
-    let _ = tr2.prepare().await;
-    let _ = tr2.commit().await;
+	for _ in 0..1000 {
+		let mut tr2 = mgr.transaction(true, Some(rt.clone())).await;
+		let _ = tr2.modify(item.clone(), None, false).await;
+		let _ = tr2.prepare().await;
+		let _ = tr2.commit().await;
+	}
 }
 
 async fn test_mem_db_read() {
