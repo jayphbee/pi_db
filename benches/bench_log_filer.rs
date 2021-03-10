@@ -180,14 +180,29 @@ fn bench_file_db_concurrent_write(b: &mut Bencher) {
     let pool = MultiTaskPool::new("Store-Runtime".to_string(), 4, 1024 * 1024, 10, Some(10));
     let rt: MultiTaskRuntime<()> = pool.startup(true);
 
+    let mgr = Mgr::new(GuidGen::new(0, 0));
+    let mgr_copy = mgr.clone();
+
+    let rt1 = rt.clone();
+    let _ = rt.spawn(rt.alloc(), async move {
+        if STORE_RUNTIME.read().await.is_none() {
+            *STORE_RUNTIME.write().await = Some(rt1.clone());
+        }
+
+        let ware = DatabaseWare::new_log_file_ware(
+            LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
+        );
+        let _ = mgr_copy.register(Atom::from("logfile"), ware).await;
+    });
+
+    std::thread::sleep(Duration::from_millis(5000));
+
     b.iter(|| {
         let (s, r) = bounded(1);
         let rt1 = rt.clone();
+        let mgr_copy = mgr.clone();
         let _ = rt.spawn(rt.alloc(), async move {
-            if STORE_RUNTIME.read().await.is_none() {
-                *STORE_RUNTIME.write().await = Some(rt1.clone());
-            }
-            test_log_file_db_concurrent_write(rt1).await;
+            test_log_file_db_concurrent_write(&mgr_copy, rt1.clone()).await;
             let _ = s.send(());
         });
         let _ = r.recv();
@@ -358,25 +373,7 @@ async fn test_log_file_db_concurrent_read(rt: MultiTaskRuntime<()>, mgr: Mgr) {
     .await
 }
 
-async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
-    let mgr = Mgr::new(GuidGen::new(0, 0));
-    let ware = DatabaseWare::new_log_file_ware(
-        LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
-    );
-    let _ = mgr.register(Atom::from("logfile"), ware).await;
-    // let mut tr = mgr.transaction(true, Some(rt.clone())).await;
-
-    // let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
-
-    // let _ = tr.alter(
-    //     &Atom::from("logfile"),
-    //     &Atom::from("./testlogfile/hello"),
-    //     Some(meta),
-    // )
-    // .await;
-    // let _ = tr.prepare().await;
-    // let _ = tr.commit().await;
-
+async fn test_log_file_db_concurrent_write(mgr: &Mgr, rt: MultiTaskRuntime<()>) {
     let mgr2 = mgr.clone();
     let mgr3 = mgr.clone();
     let mgr5 = mgr.clone();
@@ -481,7 +478,6 @@ async fn test_log_file_db_concurrent_write(rt: MultiTaskRuntime<()>) {
         });
 
         map.join(AsyncRuntime::Multi(rt5.clone()), async move {
-            println!("rt555555");
             let mut items = vec![];
             let mut wb = WriteBuffer::new();
             let key = b"hello world5";
