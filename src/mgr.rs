@@ -131,9 +131,9 @@ impl Mgr {
             tmp.push((k.clone(), v));
         }
 
-		for (k, v) in tmp {
-			map.insert(k, v.snapshot().await);
-		}
+        for (k, v) in tmp {
+            map.insert(k, v.snapshot().await);
+        }
 
         let rt = rt.as_ref().unwrap().clone();
 
@@ -999,7 +999,7 @@ impl Tr {
         let rt = self.rt.as_ref().unwrap().clone();
         let mut async_map = rt.map::<bool>();
 
-        //处理每个表的提交
+        // 处理每个表的提交
         for (txn_name, val) in self.tab_txns.iter_mut() {
             let val = val.clone();
             async_map.join(AsyncRuntime::Multi(rt.clone()), async move {

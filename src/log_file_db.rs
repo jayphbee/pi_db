@@ -1349,6 +1349,7 @@ impl AsyncLogFileStore {
         for (key, value) in pairs {
             id = self.0.log_file.append(LogMethod::PlainAppend, key, value);
         }
+        let start = std::time::Instant::now();
         match self.0.log_file.delay_commit(id, false, 0).await {
             Ok(_) => {
                 {
@@ -1357,6 +1358,7 @@ impl AsyncLogFileStore {
                         map.insert(key.to_vec(), value.clone().into());
                     }
                 }
+                println!("write_batch time == {:?}", start.elapsed());
                 Ok(())
             }
             Err(e) => {

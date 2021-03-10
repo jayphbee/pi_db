@@ -19,6 +19,7 @@ use pi_db::{
 use r#async::{
     lock::spin_lock::SpinLock,
     rt::multi_thread::{MultiTaskPool, MultiTaskRuntime},
+    rt::{AsyncMap, AsyncRuntime},
 };
 use sinfo;
 
@@ -566,11 +567,25 @@ fn bench_log_file_write() {
     let rt_copy1 = rt_copy.clone();
     let mgr_copy = mgr.clone();
 
+    let mut async_map: AsyncMap<(), ()> = rt.map();
     let (s, r) = bounded(1);
-    let _ = rt.spawn(rt.alloc(), async move {
-        for index in 0..100000 {
-            log_file_write(&rt_copy1, &mgr_copy, index).await;
+    let rt_copy = rt.clone();
+    let _ = rt.spawn(rt_copy.alloc(), async move {
+        let start = std::time::Instant::now();
+        for index in 0..100 {
+            let mgr_copy1 = mgr_copy.clone();
+            let rt_copy2 = rt_copy1.clone();
+            async_map.join(AsyncRuntime::Multi(rt_copy.clone()), async move {
+                log_file_write(&rt_copy2, &mgr_copy1, index).await;
+                Ok(())
+            });
         }
+
+        match async_map.map(AsyncRuntime::Multi(rt_copy.clone())).await {
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        println!("total time ==== {:?}", start.elapsed());
         let _ = s.send(());
     });
     let _ = r.recv();

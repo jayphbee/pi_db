@@ -3,7 +3,7 @@
  */
 use std::mem;
 use std::ops::{Deref, DerefMut};
-use std::{array::IntoIter, sync::Arc};
+use std::sync::Arc;
 
 use atom::Atom;
 use guid::Guid;

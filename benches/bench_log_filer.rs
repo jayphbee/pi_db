@@ -93,29 +93,29 @@ fn bench_log_file_write(b: &mut Bencher) {
 
     std::thread::sleep(Duration::from_millis(5000));
 
-	let mut item = vec![];
-	let mut wb = WriteBuffer::new();
-	let key = b"hello world1";
-	wb.write_bin(key, 0..key.len());
+    let mut item = vec![];
+    let mut wb = WriteBuffer::new();
+    let key = b"hello world1";
+    wb.write_bin(key, 0..key.len());
 
-	item.push(TabKV {
-		ware: Atom::from("logfile"),
-		tab: Atom::from("./testlogfile/hello"),
-		key: Arc::new(wb.bytes.clone()),
-		value: Some(Arc::new(wb.bytes)),
-		index: 0,
-	});
+    item.push(TabKV {
+        ware: Atom::from("logfile"),
+        tab: Atom::from("./testlogfile/hello"),
+        key: Arc::new(wb.bytes.clone()),
+        value: Some(Arc::new(wb.bytes)),
+        index: 0,
+    });
 
     let rt_copy = rt.clone();
     b.iter(|| {
         let rt_copy1 = rt_copy.clone();
         let mgr_copy = mgr.clone();
-		let item = item.clone();
+        let item = item.clone();
 
         let (s, r) = bounded(1);
         let _ = rt.spawn(rt.alloc(), async move {
             // for index in 0..1000 {
-                log_file_write(&rt_copy1, &mgr_copy, item.clone()).await;
+            log_file_write(&rt_copy1, &mgr_copy, item.clone()).await;
             // }
             let _ = s.send(());
         });
