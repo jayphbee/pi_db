@@ -8,9 +8,12 @@ use std::sync::Arc;
 use atom::Atom;
 use bon::WriteBuffer;
 use guid::GuidGen;
-use pi_db::db::{TabKV, TabMeta};
 use pi_db::log_file_db::LogFileDB;
 use pi_db::mgr::{DatabaseWare, Mgr};
+use pi_db::{
+    db::{TabKV, TabMeta},
+    mgr::Tr,
+};
 use r#async::rt::multi_thread::{MultiTaskPool, MultiTaskRuntime};
 use r#async::rt::AsyncRuntime;
 use sinfo;
@@ -175,6 +178,14 @@ fn bench_log_file_read(b: &mut Bencher) {
     });
 }
 
+async fn create_tab(tr: &mut Tr, tab_name: Atom, meta: TabMeta) {
+    let _ = tr
+        .alter(&Atom::from("logfile"), &tab_name, Some(meta.clone()))
+        .await;
+    let _ = tr.prepare().await;
+    let _ = tr.commit().await;
+}
+
 #[bench]
 fn bench_file_db_concurrent_write(b: &mut Bencher) {
     let pool = MultiTaskPool::new("Store-Runtime".to_string(), 4, 1024 * 1024, 10, Some(10));
@@ -193,6 +204,17 @@ fn bench_file_db_concurrent_write(b: &mut Bencher) {
             LogFileDB::new(Atom::from("./testlogfile"), 1024 * 1024 * 1024).await,
         );
         let _ = mgr_copy.register(Atom::from("logfile"), ware).await;
+
+        for i in 0..5 {
+            let mut tr = mgr_copy.transaction(true, Some(rt1.clone())).await;
+            let meta = TabMeta::new(sinfo::EnumType::Str, sinfo::EnumType::Str);
+            create_tab(
+                &mut tr,
+                Atom::from(format!("./testlogfile/hello{}", i)),
+                meta,
+            )
+            .await;
+        }
     });
 
     std::thread::sleep(Duration::from_millis(5000));
@@ -397,7 +419,7 @@ async fn test_log_file_db_concurrent_write(mgr: &Mgr, rt: MultiTaskRuntime<()>) 
 
             items.push(TabKV {
                 ware: Atom::from("logfile"),
-                tab: Atom::from("./testlogfile/hello"),
+                tab: Atom::from("./testlogfile/hello0"),
                 key: Arc::new(wb.bytes.clone()),
                 value: Some(Arc::new(wb.bytes)),
                 index: 0,
@@ -419,7 +441,7 @@ async fn test_log_file_db_concurrent_write(mgr: &Mgr, rt: MultiTaskRuntime<()>) 
 
             items.push(TabKV {
                 ware: Atom::from("logfile"),
-                tab: Atom::from("./testlogfile/hello"),
+                tab: Atom::from("./testlogfile/hello1"),
                 key: Arc::new(wb.bytes.clone()),
                 value: Some(Arc::new(wb.bytes)),
                 index: 0,
@@ -441,7 +463,7 @@ async fn test_log_file_db_concurrent_write(mgr: &Mgr, rt: MultiTaskRuntime<()>) 
 
             items.push(TabKV {
                 ware: Atom::from("logfile"),
-                tab: Atom::from("./testlogfile/hello"),
+                tab: Atom::from("./testlogfile/hello2"),
                 key: Arc::new(wb.bytes.clone()),
                 value: Some(Arc::new(wb.bytes)),
                 index: 0,
@@ -463,7 +485,7 @@ async fn test_log_file_db_concurrent_write(mgr: &Mgr, rt: MultiTaskRuntime<()>) 
 
             items.push(TabKV {
                 ware: Atom::from("logfile"),
-                tab: Atom::from("./testlogfile/hello"),
+                tab: Atom::from("./testlogfile/hello3"),
                 key: Arc::new(wb.bytes.clone()),
                 value: Some(Arc::new(wb.bytes)),
                 index: 0,
@@ -485,7 +507,7 @@ async fn test_log_file_db_concurrent_write(mgr: &Mgr, rt: MultiTaskRuntime<()>) 
 
             items.push(TabKV {
                 ware: Atom::from("logfile"),
-                tab: Atom::from("./testlogfile/hello"),
+                tab: Atom::from("./testlogfile/hello4"),
                 key: Arc::new(wb.bytes.clone()),
                 value: Some(Arc::new(wb.bytes)),
                 index: 0,
