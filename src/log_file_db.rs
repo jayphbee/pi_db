@@ -95,8 +95,9 @@ impl LogFileDB {
 			tabs.set_tab_meta(tab_name.clone(), Arc::new(meta.meta.clone())).await;
 			ALL_TABLES.lock().await.insert(tab_name.clone(), meta);
 
+			let chains = build_fork_chain(tab_name.clone()).await;
 			async_map.join(AsyncRuntime::Multi(rt.clone()), async move {
-				Ok((tab_name.clone(), LogFileTab::new(&tab_name, &vec![]).await))
+				Ok((tab_name.clone(), LogFileTab::new(&tab_name, &chains).await))
 			});
 		}
 
@@ -130,7 +131,9 @@ impl LogFileDB {
 		match LOG_FILE_TABS.read().await.get(tab) {
 			Some(t) => Ok(t.clone()),
 			None => {
-				Ok(LogFileTab::new(tab, &chains).await)
+				let cache = LogFileTab::new(tab, &chains).await;
+				LOG_FILE_TABS.write().await.insert(tab.clone(), cache.clone());
+				Ok(cache)
 			}
 		}
 	}
