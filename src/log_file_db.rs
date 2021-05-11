@@ -128,12 +128,13 @@ impl LogFileDB {
 
 	pub async fn open(tab: &Atom) -> SResult<LogFileTab> {
 		let chains = build_fork_chain(tab.clone()).await;
-		match LOG_FILE_TABS.read().await.get(tab) {
+		let mut lock = LOG_FILE_TABS.write().await;
+		match lock.get(tab) {
 			Some(t) => Ok(t.clone()),
 			None => {
 				let cache = LogFileTab::new(tab, &chains).await;
-				LOG_FILE_TABS.write().await.insert(tab.clone(), cache.clone());
-				Ok(cache)
+				lock.insert(tab.clone(), cache.clone());
+				Ok(cache.clone())
 			}
 		}
 	}
@@ -530,7 +531,6 @@ impl FileMemTxn {
 			Ok(idx) => idx,
 			Err(e) => return Err(e.to_string())
 		};
-		println!("fork_index = {:?}", index);
 
 		let mut tmi = TableMetaInfo::new(fork_tab_name.clone(), meta);
 		tmi.parent = Some(tab_name.clone());
@@ -569,17 +569,17 @@ impl FileMemTxn {
 			statistics: Arc::new(SpinLock::new(VecDeque::new())),
 		};
 
-		// 找到父表的元信息，将它的引用计数加一
-		ALL_TABLES.lock().await.entry(tab_name.clone()).and_modify(|tab| {
-			println!("add ref_count tab_name = {:?}", tab_name);
-			tab.ref_count += 1;
+		let mut lock = ALL_TABLES.lock().await;
+		if lock.contains_key(&tab_name) {
+			let mut value = lock.get_mut(&tab_name).unwrap();
+			value.ref_count += 1;
 			let mut b = WriteBuffer::new();
 			tab_name.encode(&mut b);
 
 			let mut b2 = WriteBuffer::new();
-			tab.encode(&mut b2);
-			store.write(b.bytes, b2.bytes);
-		});
+			value.encode(&mut b2);
+			store.write(b.bytes, b2.bytes).await;
+		}
 
 		// 新创建的分叉表信息写入元信息表中
 		// TODO: 错误处理
@@ -891,7 +891,7 @@ impl LogFileMetaTxn {
 	// 提交一个事务
 	pub async fn commit(&self) -> CommitResult {
 		for (tab_name, meta) in self.alters.lock().await.iter() {
-			if let Some(_) = ALL_TABLES.lock().await.get(tab_name) {
+			if ALL_TABLES.lock().await.get(tab_name).is_some() && meta.is_some() {
 				return Err(format!("tab_name: {:?} exist", tab_name))
 			}
 			let mut kt = WriteBuffer::new();
@@ -928,8 +928,7 @@ impl LogFileMetaTxn {
 
 					// 新创建的表加入ALL_TABLES的缓存
 					let meta_name = Atom::from(db_path + &DB_META_TAB_NAME);
-					ALL_TABLES.lock().await.insert(meta_name, tmi);
-
+					ALL_TABLES.lock().await.insert(tab_name.clone(), tmi.clone());
 					// 新创建表的元信息写入元信息表中
 					store.write(kt.bytes, vt.bytes).await;
 				}
@@ -951,13 +950,16 @@ impl LogFileMetaTxn {
 					ALL_TABLES.lock().await.remove(&tab_name);
 					// 找到他的父表，将父表的引用计数减一
 					let mut wb = WriteBuffer::new();
-					parent.clone().unwrap().encode(&mut wb);
-					ALL_TABLES.lock().await.entry(parent.clone().unwrap()).and_modify(|t| {
-						t.ref_count -= 1;
-						let mut wb2 = WriteBuffer::new();
-						t.encode(&mut wb2);
-						store.write(wb.bytes, wb2.bytes);
-					});
+					if let Some(parent) = parent {
+						let mut lock = ALL_TABLES.lock().await;
+						if lock.contains_key(&parent) {
+							let mut value = lock.get_mut(&parent).unwrap();
+							value.ref_count -= 1;
+							let mut wb2 = WriteBuffer::new();
+							value.encode(&mut wb2);
+							store.write(wb.bytes, wb2.bytes).await;
+						}
+					}
 				}
 			}
 		}
